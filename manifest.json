@@ -31,8 +31,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["utils/storage.js", "utils/analytics.js", "utils/context-extractor.js", "content/overlay.js", "content/content.js"],
-      "css": ["content/overlay.css"],
+      "js": ["utils/storage.js", "utils/analytics.js", "utils/context-extractor.js", "utils/element-matcher.js", "content/cursor-guide.js", "content/overlay.js", "content/speech.js", "content/content.js"],
+      "css": ["content/overlay.css", "content/cursor-guide.css"],
       "run_at": "document_idle"
     },
     {
@@ -58,6 +58,16 @@
       "run_at": "document_idle"
     }
   ],
+  "commands": {
+    "start_listening": {
+      "suggested_key": {
+        "default": "Alt+Space",
+        "mac": "Alt+Space"
+      },
+      "description": "Start Learning Mode Voice Input",
+      "global": true
+    }
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

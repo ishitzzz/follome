@@ -248,4 +248,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === sourceTabId) sourceTabId = null;
 });
 
+// ── Keyboard Shortcuts ──
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'start_listening') {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0) {
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_SPEECH' });
+    }
+  }
+});
+
 console.log('[FolloMe] Service worker initialized');

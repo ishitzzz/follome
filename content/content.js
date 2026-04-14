@@ -43,6 +43,13 @@
         sendResponse({ status: 'alive' });
         break;
 
+      case 'TOGGLE_SPEECH':
+        if (typeof FolloSpeech !== 'undefined') {
+          FolloSpeech.toggle();
+        }
+        sendResponse({ status: 'toggled' });
+        break;
+
       default:
         sendResponse({ status: 'unknown_type' });
     }
