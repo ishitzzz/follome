@@ -89,10 +89,14 @@ const FolloSpeech = (() => {
 
      const context = typeof ContextExtractor !== 'undefined' ? ContextExtractor.extract() : "";
      
-     // Construct learning mode prompt
-     const prompt = `User is on a webpage. Help them step-by-step like a tutorial. Keep it simple: no long paragraphs, actionable steps only. Explain what each major section does and what they should try next.
-User question: ${text}
-Page context: ${JSON.stringify(context)}`;
+     // Construct learning mode prompt but rely on ContextExtractor for the cursor JSON instructions.
+     let prompt = "";
+     if (typeof ContextExtractor !== 'undefined') {
+       const specialInstruction = `[LEARNING MODE ACTIVE]\nHelp me step-by-step like a tutorial. Keep it simple: no long paragraphs, clear actionable steps only. Explain what each major section does and what I should try next regarding this query: "${text}"`;
+       prompt = ContextExtractor.buildPrompt(context, specialInstruction);
+     } else {
+       prompt = `User is on a webpage. Help them step-by-step like a tutorial. Keep it simple. User question: ${text}`;
+     }
      
      chrome.runtime.sendMessage({
        type: 'SEND_TO_AI',
