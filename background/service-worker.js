@@ -43,12 +43,12 @@ async function findAITab() {
 }
 
 /**
- * Ensure content script is injected into a tab
+ * Ensure content script is injected into an AI tab
  */
-async function ensureContentScript(tabId) {
+async function ensureAIContentScript(tabId) {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    return response?.status === 'alive';
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'PING_AI' });
+    return response?.status === 'alive_ai';
   } catch {
     return false;
   }
@@ -93,7 +93,7 @@ async function waitForContentScript(tabId, timeout = 10000) {
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
-    const alive = await ensureContentScript(tabId);
+    const alive = await ensureAIContentScript(tabId);
     if (alive) return true;
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -145,6 +145,14 @@ async function handleMessage(message, sender, sendResponse) {
           // Focus the AI tab
           await chrome.tabs.update(aiTabId, { active: true });
           await chrome.windows.update(aiTab.windowId, { focused: true });
+
+          // If the script isn't responding (e.g. extension was just updated or tab is asleep)
+          const isAlive = await ensureAIContentScript(aiTabId);
+          if (!isAlive) {
+            console.log('[FolloMe] existing AI tab unresponsive, reloading...');
+            chrome.tabs.reload(aiTabId);
+            await waitForTabLoad(aiTabId);
+          }
         } else {
           // Open ChatGPT as default
           const newTab = await chrome.tabs.create({

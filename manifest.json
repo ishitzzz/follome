@@ -61,8 +61,8 @@
   "commands": {
     "start_listening": {
       "suggested_key": {
-        "default": "Alt+Space",
-        "mac": "Alt+Space"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
       "description": "Start Learning Mode Voice Input",
       "global": true

@@ -32,6 +32,10 @@
         sendResponse({ status: 'alive', adapter: adapter.name });
         break;
 
+      case 'PING_AI':
+        sendResponse({ status: 'alive_ai', adapter: adapter.name });
+        break;
+
       default:
         sendResponse({ status: 'unknown_type' });
     }
