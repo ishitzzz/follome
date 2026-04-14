@@ -1,0 +1,404 @@
+/* =========================================
+   FolloMe — Overlay Styles
+   Minimal, premium, non-intrusive overlay
+   ========================================= */
+
+/* Reset for FolloMe elements */
+#follome-overlay,
+#follome-overlay * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+/* ── Main Container ── */
+#follome-overlay {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 380px;
+  max-height: 520px;
+  background: rgba(15, 15, 20, 0.92);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 8px 40px rgba(0, 0, 0, 0.5),
+    0 2px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  z-index: 2147483646;
+  overflow: hidden;
+  color: #e4e4e7;
+  font-size: 13px;
+  transform: translateY(20px) scale(0.96);
+  opacity: 0;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+#follome-overlay.follome-visible {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+
+#follome-overlay.follome-minimized .follome-body {
+  display: none;
+}
+
+#follome-overlay.follome-minimized {
+  max-height: 48px;
+  width: 200px;
+}
+
+/* ── Header ── */
+.follome-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.follome-header:active {
+  cursor: grabbing;
+}
+
+.follome-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.follome-icon {
+  font-size: 18px;
+  background: linear-gradient(135deg, #818cf8, #c084fc, #f472b6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: follome-icon-glow 3s ease-in-out infinite;
+}
+
+@keyframes follome-icon-glow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.4); }
+}
+
+.follome-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #e2e8f0, #94a3b8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.follome-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.follome-controls button {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: #a1a1aa;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+
+.follome-controls button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e4e4e7;
+}
+
+/* ── Body ── */
+.follome-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+/* ── Status Bar ── */
+.follome-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 11px;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+}
+
+/* ── Pulse Indicator ── */
+.follome-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6366f1;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.follome-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid rgba(99, 102, 241, 0.3);
+}
+
+.follome-pulse.active {
+  background: #f59e0b;
+  animation: follome-blink 1.2s ease-in-out infinite;
+}
+
+.follome-pulse.active::after {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.follome-pulse.success {
+  background: #22c55e;
+}
+
+.follome-pulse.success::after {
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.follome-pulse.error {
+  background: #ef4444;
+}
+
+.follome-pulse.error::after {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+@keyframes follome-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Content Area ── */
+.follome-content {
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 340px;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+.follome-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.follome-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.follome-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+/* ── Response Formatting ── */
+.follome-response {
+  font-size: 13px;
+  line-height: 1.65;
+  color: #d4d4d8;
+}
+
+.follome-response p {
+  margin-bottom: 10px;
+}
+
+.follome-response strong {
+  color: #e4e4e7;
+  font-weight: 600;
+}
+
+.follome-steps {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  counter-reset: step;
+}
+
+.follome-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  border-radius: 10px;
+  font-size: 12.5px;
+  transition: background 0.2s ease;
+}
+
+.follome-step:hover {
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: linear-gradient(135deg, #6366f1, #818cf8);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.follome-bullet {
+  padding: 4px 0 4px 16px;
+  position: relative;
+  font-size: 12.5px;
+  list-style: none;
+}
+
+.follome-bullet::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: #818cf8;
+  font-weight: bold;
+}
+
+/* ── Loading Shimmer ── */
+.follome-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.follome-shimmer {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: follome-shimmer-anim 1.5s ease-in-out infinite;
+}
+
+.follome-shimmer.short {
+  width: 60%;
+}
+
+@keyframes follome-shimmer-anim {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Error ── */
+.follome-error {
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  border-radius: 10px;
+  color: #fca5a5;
+  font-size: 12.5px;
+}
+
+/* ── Follow-up Input ── */
+.follome-followup {
+  display: none;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.follome-input {
+  flex: 1;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0 12px;
+  color: #e4e4e7;
+  font-size: 12.5px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.follome-input:focus {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+}
+
+.follome-input::placeholder {
+  color: #52525b;
+}
+
+.follome-btn-send {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: linear-gradient(135deg, #6366f1, #818cf8);
+  color: #fff;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.follome-btn-send:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+}
+
+.follome-btn-send:active {
+  transform: scale(0.95);
+}
+
+/* ── Element Highlight ── */
+.follome-highlight {
+  border: 2px solid #818cf8;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.08);
+  animation: follome-highlight-pulse 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes follome-highlight-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(99, 102, 241, 0);
+  }
+}

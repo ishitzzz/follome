@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head><title>FolloMe Icon Generator</title></head>
+<body>
+<canvas id="c16" width="16" height="16"></canvas>
+<canvas id="c48" width="48" height="48"></canvas>
+<canvas id="c128" width="128" height="128"></canvas>
+<script>
+function drawIcon(canvas, size) {
+  const ctx = canvas.getContext('2d');
+  
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, size, size);
+  bgGrad.addColorStop(0, '#0f0f1a');
+  bgGrad.addColorStop(1, '#1a1025');
+  ctx.fillStyle = bgGrad;
+  
+  // Rounded rect
+  const r = size * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(size - r, 0);
+  ctx.quadraticCurveTo(size, 0, size, r);
+  ctx.lineTo(size, size - r);
+  ctx.quadraticCurveTo(size, size, size - r, size);
+  ctx.lineTo(r, size);
+  ctx.quadraticCurveTo(0, size, 0, size - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.fill();
+  
+  // Star/compass shape
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerR = size * 0.32;
+  const innerR = size * 0.13;
+  const points = 4;
+  
+  const starGrad = ctx.createLinearGradient(cx - outerR, cy - outerR, cx + outerR, cy + outerR);
+  starGrad.addColorStop(0, '#818cf8');
+  starGrad.addColorStop(0.5, '#c084fc');
+  starGrad.addColorStop(1, '#f472b6');
+  ctx.fillStyle = starGrad;
+  
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const radius = i % 2 === 0 ? outerR : innerR;
+    const angle = (Math.PI / points) * i - Math.PI / 2;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  
+  // Center dot
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.05, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Glow
+  ctx.shadowColor = '#818cf8';
+  ctx.shadowBlur = size * 0.15;
+  ctx.fillStyle = 'rgba(129, 140, 248, 0.3)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  
+  return canvas.toDataURL('image/png');
+}
+
+[['c16', 16], ['c48', 48], ['c128', 128]].forEach(([id, size]) => {
+  const canvas = document.getElementById(id);
+  const dataUrl = drawIcon(canvas, size);
+  
+  const link = document.createElement('a');
+  link.download = `icon${size}.png`;
+  link.href = dataUrl;
+  link.textContent = `Download ${size}x${size}`;
+  document.body.appendChild(link);
+  document.body.appendChild(document.createElement('br'));
+});
+</script>
+</body>
+</html>
