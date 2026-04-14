@@ -1,333 +1,145 @@
 /* =========================================
-   FolloMe — Cursor Guide Styles v2
-   Confidence-scored, curved-path, controllable
+   FolloMe — Persistent Cursor Guide Styles
+   Single-instance, always-on, rAF-driven
    ========================================= */
 
-/* ── Animated Pointer Dot ── */
-.follome-cursor-dot {
+/* ── Cursor Dot ──
+   One element, never removed.
+   Hidden by default (.active makes it visible).
+   Uses translate3d for GPU-accelerated positioning. */
+
+#follome-cursor {
   position: fixed;
-  width: 18px;
-  height: 18px;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: radial-gradient(circle, #818cf8 0%, #6366f1 60%, rgba(99, 102, 241, 0.4) 100%);
-  z-index: 2147483644;
+  background: radial-gradient(circle, #818cf8 0%, #6366f1 60%, rgba(99, 102, 241, 0.6) 100%);
+  z-index: 2147483647;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(0);
   opacity: 0;
-  transition: opacity 0.3s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: opacity 0.3s ease;
   box-shadow:
     0 0 12px rgba(99, 102, 241, 0.5),
     0 0 24px rgba(99, 102, 241, 0.2);
-  will-change: transform, opacity, left, top;
+  will-change: transform;
 }
 
-.follome-cursor-dot.visible {
-  transform: translate(-50%, -50%) scale(1);
+#follome-cursor.active {
   opacity: 1;
 }
 
-/* In-flight — no CSS transitions, JS drives position */
-.follome-cursor-dot.in-flight {
-  transition: none;
-  transform: translate(-50%, -50%) scale(0.9);
-  box-shadow:
-    0 0 16px rgba(99, 102, 241, 0.6),
-    0 0 32px rgba(99, 102, 241, 0.25);
+/* Arrived — glow intensifies (no transform to avoid conflicting with JS positioning) */
+#follome-cursor.arrived {
+  animation: follome-cursor-pulse 1.5s ease-in-out infinite;
 }
 
-/* Arrival — scale-up pop */
-.follome-cursor-dot.arriving {
-  animation: follome-cursor-arrive 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-}
-
-@keyframes follome-cursor-arrive {
-  0% {
-    transform: translate(-50%, -50%) scale(0.9);
-    box-shadow:
-      0 0 16px rgba(99, 102, 241, 0.6),
-      0 0 32px rgba(99, 102, 241, 0.25);
-  }
-  50% {
-    transform: translate(-50%, -50%) scale(1.35);
-    box-shadow:
-      0 0 24px rgba(99, 102, 241, 0.7),
-      0 0 48px rgba(99, 102, 241, 0.35);
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(1);
-    box-shadow:
-      0 0 12px rgba(99, 102, 241, 0.5),
-      0 0 24px rgba(99, 102, 241, 0.2);
-  }
-}
-
-/* Thinking state — subtle pulsing color shift */
-.follome-cursor-dot.thinking {
-  animation: follome-cursor-think 0.8s ease-in-out infinite;
-}
-
-@keyframes follome-cursor-think {
-  0%, 100% {
-    background: radial-gradient(circle, #a5b4fc 0%, #818cf8 60%, rgba(129, 140, 248, 0.4) 100%);
-    transform: translate(-50%, -50%) scale(0.85);
-    box-shadow:
-      0 0 8px rgba(129, 140, 248, 0.4),
-      0 0 18px rgba(129, 140, 248, 0.15);
-  }
-  50% {
-    background: radial-gradient(circle, #c7d2fe 0%, #a5b4fc 60%, rgba(165, 180, 252, 0.4) 100%);
-    transform: translate(-50%, -50%) scale(1.05);
-    box-shadow:
-      0 0 14px rgba(165, 180, 252, 0.6),
-      0 0 28px rgba(165, 180, 252, 0.25);
-  }
-}
-
-/* Idle breathing animation */
-.follome-cursor-dot.idle {
-  animation: follome-cursor-breathe 2s ease-in-out infinite;
-}
-
-@keyframes follome-cursor-breathe {
+@keyframes follome-cursor-pulse {
   0%, 100% {
     box-shadow:
       0 0 12px rgba(99, 102, 241, 0.5),
-      0 0 24px rgba(99, 102, 241, 0.2);
-    transform: translate(-50%, -50%) scale(1);
+      0 0 24px rgba(99, 102, 241, 0.2),
+      0 0 0 0 rgba(99, 102, 241, 0.3);
+    width: 20px;
+    height: 20px;
   }
   50% {
     box-shadow:
-      0 0 18px rgba(99, 102, 241, 0.6),
-      0 0 36px rgba(99, 102, 241, 0.3);
-    transform: translate(-50%, -50%) scale(1.15);
+      0 0 20px rgba(99, 102, 241, 0.8),
+      0 0 40px rgba(99, 102, 241, 0.4),
+      0 0 0 10px rgba(99, 102, 241, 0.1);
+    width: 24px;
+    height: 24px;
   }
 }
 
-/* ── Expanding Pulse Ring ── */
-.follome-pulse-ring {
+/* Paused — muted */
+#follome-cursor.paused {
+  opacity: 0.5;
+  animation: none;
+}
+
+
+/* ── Label ──
+   One element, repositioned per step.
+   Hidden until .visible is added. */
+
+#follome-cursor-label {
   position: fixed;
-  border-radius: 50%;
-  border: 2px solid rgba(99, 102, 241, 0.6);
-  z-index: 2147483643;
-  pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.5);
-  opacity: 0;
-  will-change: transform, opacity;
-  animation: follome-ring-expand 1.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.follome-pulse-ring.ring-2 {
-  animation-delay: 0.3s;
-}
-
-.follome-pulse-ring.ring-3 {
-  animation-delay: 0.6s;
-}
-
-@keyframes follome-ring-expand {
-  0% {
-    transform: translate(-50%, -50%) scale(0.5);
-    opacity: 0.7;
-  }
-  70% {
-    opacity: 0.3;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(3);
-    opacity: 0;
-  }
-}
-
-/* Repeating Pulse */
-.follome-pulse-ring.repeating {
-  animation: follome-ring-repeat 2.4s ease-in-out infinite;
-}
-
-.follome-pulse-ring.repeating.ring-2 {
-  animation-delay: 0.8s;
-}
-
-@keyframes follome-ring-repeat {
-  0% {
-    transform: translate(-50%, -50%) scale(0.6);
-    opacity: 0.5;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(2.5);
-    opacity: 0;
-  }
-}
-
-/* ── Inline Label ── */
-.follome-guide-label {
-  position: fixed;
-  z-index: 2147483645;
+  top: 0;
+  left: 0;
+  z-index: 2147483647;
   pointer-events: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 12px 5px 10px;
-  background: rgba(15, 15, 20, 0.88);
+  padding: 5px 12px;
+  background: rgba(15, 15, 20, 0.92);
   backdrop-filter: blur(16px) saturate(1.6);
   -webkit-backdrop-filter: blur(16px) saturate(1.6);
-  border: 1px solid rgba(99, 102, 241, 0.25);
+  border: 1px solid rgba(99, 102, 241, 0.3);
   border-radius: 8px;
   box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 4px 16px rgba(0, 0, 0, 0.35),
     0 0 0 1px rgba(255, 255, 255, 0.04),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: #c7d2fe;
   letter-spacing: 0.3px;
   white-space: nowrap;
-  transform: translateY(6px);
   opacity: 0;
-  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform, opacity;
+  transition: opacity 0.25s ease;
+  will-change: transform;
 }
 
-.follome-guide-label.visible {
-  transform: translateY(0);
+#follome-cursor-label.visible {
   opacity: 1;
 }
 
-.follome-guide-label .follome-label-icon {
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: linear-gradient(135deg, #6366f1, #818cf8);
-  flex-shrink: 0;
-}
 
-.follome-guide-label .follome-label-icon svg {
-  width: 10px;
-  height: 10px;
-  fill: none;
-  stroke: #fff;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
+/* ── Target Highlight ──
+   Outline around the current target element. */
 
-/* Arrow connector */
-.follome-guide-label::before {
-  content: '';
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: rgba(15, 15, 20, 0.88);
-  border-left: 1px solid rgba(99, 102, 241, 0.25);
-  border-top: 1px solid rgba(99, 102, 241, 0.25);
-  transform: rotate(-45deg);
-  top: -5px;
-  left: 16px;
-}
-
-.follome-guide-label.above::before {
-  top: auto;
-  bottom: -5px;
-  transform: rotate(135deg);
-}
-
-/* ── Candidate Label (low confidence) ── */
-.follome-guide-label.follome-candidate-label {
-  border-color: rgba(245, 158, 11, 0.3);
-  color: #fde68a;
-}
-
-.follome-guide-label.follome-candidate-label::before {
-  border-left-color: rgba(245, 158, 11, 0.3);
-  border-top-color: rgba(245, 158, 11, 0.3);
-}
-
-.follome-guide-label.follome-candidate-label .follome-label-icon.candidate {
-  background: linear-gradient(135deg, #f59e0b, #fbbf24);
-}
-
-.follome-guide-label.follome-candidate-label .follome-label-icon.candidate svg {
-  stroke: #451a03;
-}
-
-/* ── Target Highlight Overlay ── */
-.follome-target-highlight {
+#follome-cursor-highlight {
   position: fixed;
-  z-index: 2147483642;
+  z-index: 2147483645;
   pointer-events: none;
-  border: 2px solid rgba(99, 102, 241, 0.45);
+  border: 2px solid rgba(99, 102, 241, 0.5);
   border-radius: 8px;
   background: rgba(99, 102, 241, 0.06);
   opacity: 0;
-  transform: scale(1.04);
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: opacity, transform;
+  transition: opacity 0.3s ease, top 0.2s ease, left 0.2s ease, width 0.2s ease, height 0.2s ease;
 }
 
-.follome-target-highlight.visible {
+#follome-cursor-highlight.visible {
   opacity: 1;
-  transform: scale(1);
-  animation: follome-target-glow 2s ease-in-out infinite;
+  animation: follome-highlight-glow 2s ease-in-out infinite;
 }
 
-@keyframes follome-target-glow {
+@keyframes follome-highlight-glow {
   0%, 100% {
     box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.15);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.08);
+    box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.08);
   }
 }
 
-/* Candidate highlight (low-confidence) — amber styling */
-.follome-target-highlight.follome-candidate-highlight {
-  border-color: rgba(245, 158, 11, 0.35);
-  background: rgba(245, 158, 11, 0.04);
-  border-style: dashed;
-}
 
-.follome-target-highlight.follome-candidate-highlight.visible {
-  animation: follome-candidate-glow 2s ease-in-out infinite;
-}
+/* ── Step Badge ──
+   Step number indicator near the target */
 
-@keyframes follome-candidate-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.12);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.06);
-  }
-}
-
-/* ── Movement Trail Dots ── */
-.follome-trail-dot {
+#follome-cursor-badge {
   position: fixed;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(99, 102, 241, 0.4);
-  z-index: 2147483643;
+  top: 0;
+  left: 0;
+  z-index: 2147483647;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(1);
-  transition: opacity 0.4s ease, transform 0.4s ease;
-  will-change: opacity, transform;
-}
-
-.follome-trail-dot.fading {
-  transform: translate(-50%, -50%) scale(0);
-  opacity: 0;
-}
-
-/* ── Step Counter Badge ── */
-.follome-step-badge {
-  position: fixed;
-  z-index: 2147483645;
-  pointer-events: none;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -339,35 +151,16 @@
   font-weight: 800;
   box-shadow:
     0 2px 8px rgba(99, 102, 241, 0.4),
-    0 0 0 3px rgba(99, 102, 241, 0.15);
-  transform: translate(-50%, -50%) scale(0);
+    0 0 0 2px rgba(99, 102, 241, 0.15);
   opacity: 0;
-  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-  will-change: transform, opacity;
+  transition: opacity 0.25s ease;
+  will-change: transform;
 }
 
-.follome-step-badge.visible {
-  transform: translate(-50%, -50%) scale(1);
+#follome-cursor-badge.visible {
   opacity: 1;
 }
 
-/* ── Exit Animation ── */
-.follome-cursor-dot.exiting,
-.follome-guide-label.exiting,
-.follome-target-highlight.exiting,
-.follome-step-badge.exiting {
-  opacity: 0 !important;
-  transform: translate(-50%, -50%) scale(0.5) !important;
-  transition: all 0.3s cubic-bezier(0.55, 0, 1, 0.45) !important;
-}
-
-.follome-guide-label.exiting {
-  transform: translateY(6px) !important;
-}
-
-.follome-target-highlight.exiting {
-  transform: scale(1.04) !important;
-}
 
 /* ══════════════════════════════════════════
    PLAYBACK CONTROLS BAR (in overlay)
@@ -387,7 +180,6 @@
   display: flex;
 }
 
-/* Progress text */
 .follome-guide-progress {
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 10.5px;
@@ -405,7 +197,6 @@
   color: #c7d2fe;
 }
 
-/* Control buttons */
 .follome-guide-controls button {
   width: 28px;
   height: 28px;
@@ -446,7 +237,9 @@
   stroke-linejoin: round;
 }
 
-/* ── No-match message in overlay ── */
+
+/* ── No-match message ── */
+
 .follome-nomatch {
   display: flex;
   align-items: flex-start;
@@ -485,17 +278,13 @@
 }
 
 @keyframes follome-nomatch-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Confidence indicator dots in steps ── */
+
+/* ── Confidence dots ── */
+
 .follome-confidence-dot {
   display: inline-block;
   width: 6px;

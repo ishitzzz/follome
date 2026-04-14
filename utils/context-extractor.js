@@ -487,26 +487,42 @@ const ContextExtractor = (() => {
       prompt += `\n**Help me understand what to do next on this page.**\n`;
     }
 
-    // Instruct AI to return structured response
+    // Strict output enforcement — AI MUST return ONLY the structured block
     prompt += `
-**IMPORTANT: Response Format**
-Please respond in this EXACT format:
 
-1. First, provide a JSON block with structured actions:
+You MUST return your response ONLY in the following format:
+
 \`\`\`actions
 [
-  { "action": "click", "target": "Submit button", "idx": 5, "explanation": "Click to submit the form" },
-  { "action": "type", "target": "Email field", "idx": 2, "value": "example", "explanation": "Enter your email address" }
+  {
+    "action": "click | type | select | scroll | focus | hover | toggle | wait",
+    "target": "human readable element name",
+    "idx": number or null,
+    "value": "optional string or omit",
+    "explanation": "short instruction for the user"
+  }
 ]
 \`\`\`
 
-2. Then provide a human-readable explanation below the JSON block.
+Rules:
+- Do NOT include any text before or after the \`\`\`actions block.
+- Do NOT explain outside JSON.
+- Do NOT wrap in markdown except \`\`\`actions.
+- Always return at least one action.
+- If unsure, guess the most likely action the user should take.
+- "action" must be one of: click, type, select, scroll, focus, hover, toggle, wait.
+- "target" must be a human-readable element description (e.g. "Submit button", "Email input field").
+- "idx" should reference the element index from the UI Elements list above when possible, otherwise null.
+- "explanation" must be a short, actionable instruction.
 
-**Action types:** click, type, select, scroll, focus, hover, toggle, wait
-**"idx"** should reference the element index from the UI Elements list above (if a matching element exists).
-**"target"** should be a human-readable description of the element.
-
-Be specific, concise, and actionable.`;
+Example for a login page:
+\`\`\`actions
+[
+  {"action": "type", "target": "Email input field", "idx": 0, "value": "your email", "explanation": "Enter your email address"},
+  {"action": "type", "target": "Password field", "idx": 1, "value": "your password", "explanation": "Enter your password"},
+  {"action": "click", "target": "Sign In button", "idx": 2, "explanation": "Click to sign in"}
+]
+\`\`\``;
 
     return prompt;
   }

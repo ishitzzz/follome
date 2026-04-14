@@ -156,6 +156,7 @@ const FolloOverlay = (() => {
     if (typeof FolloCursorGuide !== 'undefined') {
       // Slight delay so the overlay settles before visual guides appear
       setTimeout(() => {
+        console.log("calling cursor guide");
         FolloCursorGuide.processResponse(text);
       }, 600);
     }

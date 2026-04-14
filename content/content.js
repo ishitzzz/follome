@@ -1,108 +1,105 @@
 /**
  * FolloMe — Main Content Script
- * Runs on all pages. Handles:
- * → DOM reading via ContextExtractor
- * → Overlay rendering via FolloOverlay
- * → Message routing from popup/background
+ * Runs on all web pages. Handles page analysis, overlay display, and cursor guidance.
+ * Listener is registered immediately and unconditionally to ensure the
+ * background service worker can always reach this script.
  */
 
 (() => {
-  // Prevent double injection
-  if (window.__follomeContentLoaded) return;
-  window.__follomeContentLoaded = true;
+  // Register message listener IMMEDIATELY — even if this script runs multiple times.
+  // The guard flag only protects against duplicate DOM/logic setup, not the listener.
+  const alreadyLoaded = !!window.__follomeContentLoaded;
 
-  // Initialize analytics
-  FolloAnalytics.init();
-
-  /**
-   * Listen for messages from popup and background
-   */
+  // Always register listener so injection-retry can reach us
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.type) {
-      case 'ANALYZE_PAGE':
-        handleAnalyzePage(message.question);
-        sendResponse({ status: 'started' });
-        break;
+    console.log(`[FolloMe:content] Received message: ${message.type}`);
 
-      case 'SHOW_RESPONSE':
-        handleShowResponse(message.response);
-        sendResponse({ status: 'shown' });
-        break;
-
-      case 'SHOW_ERROR':
+    if (message.type === 'ANALYZE_PAGE') {
+      handleAnalyzePage(message.question);
+      sendResponse({ status: 'started' });
+    } else if (message.type === 'SHOW_RESPONSE') {
+      handleShowResponse(message.response);
+      sendResponse({ status: 'shown' });
+    } else if (message.type === 'SHOW_ERROR') {
+      if (typeof FolloOverlay !== 'undefined') {
         FolloOverlay.showError(message.error);
-        sendResponse({ status: 'shown' });
-        break;
-
-      case 'SHOW_LOADING':
+      } else {
+        console.error(`[FolloMe:content] FolloOverlay not available to show error: ${message.error}`);
+      }
+      sendResponse({ status: 'shown' });
+    } else if (message.type === 'SHOW_LOADING') {
+      if (typeof FolloOverlay !== 'undefined') {
         FolloOverlay.showLoading(message.message || 'Processing...');
-        sendResponse({ status: 'shown' });
-        break;
-
-      case 'PING':
-        sendResponse({ status: 'alive' });
-        break;
-
-      case 'TOGGLE_SPEECH':
-        if (typeof FolloSpeech !== 'undefined') {
-          FolloSpeech.toggle();
-        }
-        sendResponse({ status: 'toggled' });
-        break;
-
-      default:
-        sendResponse({ status: 'unknown_type' });
+      }
+      sendResponse({ status: 'shown' });
+    } else if (message.type === 'PING') {
+      sendResponse({ status: 'alive' });
+    } else {
+      console.log(`[FolloMe:content] Unknown message type: ${message.type}`);
+      sendResponse({ status: 'unknown_type' });
     }
-    return true; // Keep message channel open for async
+    return true;
   });
 
-  /**
-   * Handle page analysis request from popup
-   */
+  // If already loaded, skip the rest (prevents duplicate DOM setup)
+  if (alreadyLoaded) {
+    console.log('[FolloMe:content] Already loaded — listener re-registered, skipping init.');
+    return;
+  }
+  window.__follomeContentLoaded = true;
+
   async function handleAnalyzePage(userQuestion = '') {
     try {
-      // Show overlay with loading state
-      FolloOverlay.showLoading('Reading page content...');
+      if (typeof FolloOverlay !== 'undefined') {
+        FolloOverlay.showLoading('Reading page content...');
+      }
+      console.log('[FolloMe:content] Analyzing page...');
 
-      // Track event
-      await FolloAnalytics.track('page_analyzed', {
-        url: window.location.href,
-        hasQuestion: !!userQuestion
-      });
+      if (typeof ContextExtractor === 'undefined') {
+        console.error('[FolloMe:content] ContextExtractor is not available');
+        if (typeof FolloOverlay !== 'undefined') {
+          FolloOverlay.showError('Page analyzer not loaded. Try reloading the page.');
+        }
+        return;
+      }
 
-      // Extract context
       const context = ContextExtractor.extract();
+      console.log('[FolloMe:content] Context extracted');
       const prompt = ContextExtractor.buildPrompt(context, userQuestion);
 
-      // Send to background to route to AI tab
       chrome.runtime.sendMessage({
         type: 'SEND_TO_AI',
         prompt,
         sourceTabUrl: window.location.href
       });
 
-      FolloOverlay.showLoading('Sending to AI...');
+      if (typeof FolloOverlay !== 'undefined') {
+        FolloOverlay.showLoading('Sending to AI...');
+      }
     } catch (err) {
-      console.error('[FolloMe] Analysis error:', err);
-      FolloOverlay.showError(`Failed to analyze page: ${err.message}`);
+      console.error('[FolloMe:content] Analysis error:', err);
+      if (typeof FolloOverlay !== 'undefined') {
+        FolloOverlay.showError(`Failed to analyze page: ${err.message}`);
+      }
     }
   }
 
-  /**
-   * Handle AI response display
-   */
-  async function handleShowResponse(response) {
+  function handleShowResponse(response) {
     if (!response) {
-      FolloOverlay.showError('No response received from AI.');
+      if (typeof FolloOverlay !== 'undefined') {
+        FolloOverlay.showError('No response received from AI.');
+      }
       return;
     }
 
-    FolloOverlay.showResponse(response);
+    console.log('[FolloMe:content] Displaying AI response');
 
-    await FolloAnalytics.track('ai_response_received', {
-      responseLength: response.length
-    });
+    if (typeof FolloOverlay !== 'undefined') {
+      FolloOverlay.showResponse(response);
+    } else {
+      console.error('[FolloMe:content] FolloOverlay not available to show response');
+    }
   }
 
-  console.log('[FolloMe] Content script loaded on:', window.location.href);
+  console.log('[FolloMe:content] Content script loaded and listening');
 })();

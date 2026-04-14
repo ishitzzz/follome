@@ -107,12 +107,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       type: 'START_ANALYSIS',
       question
     }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[FolloMe:popup] sendMessage error:', chrome.runtime.lastError.message);
+        setStatus('error', 'Extension error — try reloading');
+        btnAnalyze.classList.remove('loading');
+        return;
+      }
+
       if (response?.status === 'started') {
         setStatus('loading', 'Context sent to AI...');
         // Close popup after a short delay
         setTimeout(() => window.close(), 1500);
+      } else if (response?.status === 'error') {
+        setStatus('error', response.error || 'Failed to start analysis');
+        btnAnalyze.classList.remove('loading');
       } else {
-        setStatus('error', 'Failed to start analysis');
+        setStatus('error', 'Unexpected response from extension');
         btnAnalyze.classList.remove('loading');
       }
     });
