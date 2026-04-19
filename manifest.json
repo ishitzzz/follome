@@ -31,7 +31,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["utils/storage.js", "utils/analytics.js", "utils/context-extractor.js", "utils/element-matcher.js", "content/cursor-guide.js", "content/overlay.js", "content/speech.js", "content/content.js"],
+      "js": ["utils/storage.js", "utils/analytics.js", "utils/context-extractor.js", "utils/element-matcher.js", "brain/guidance-state.js", "brain/recovery-engine.js", "content/cursor-guide.js", "content/passive-tracker.js", "content/overlay.js", "content/speech.js", "content/content.js"],
       "css": ["content/overlay.css", "content/cursor-guide.css"],
       "run_at": "document_idle"
     },
@@ -40,21 +40,21 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/chatgpt-adapter.js", "adapters/router.js", "content/ai-content.js"],
+      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/chatgpt-adapter.js", "adapters/router.js", "watchers/conversation-watcher.js", "content/ai-content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
         "https://gemini.google.com/*"
       ],
-      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/gemini-adapter.js", "adapters/router.js", "content/ai-content.js"],
+      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/gemini-adapter.js", "adapters/router.js", "watchers/conversation-watcher.js", "content/ai-content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": [
         "https://claude.ai/*"
       ],
-      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/claude-adapter.js", "adapters/router.js", "content/ai-content.js"],
+      "js": ["utils/storage.js", "utils/analytics.js", "adapters/base-adapter.js", "adapters/claude-adapter.js", "adapters/router.js", "watchers/conversation-watcher.js", "content/ai-content.js"],
       "run_at": "document_idle"
     }
   ],

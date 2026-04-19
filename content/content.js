@@ -101,5 +101,93 @@
     }
   }
 
+  // ══════════════════════════════════════════
+  // DOM STABILITY MONITOR (T-6.1)
+  // ══════════════════════════════════════════
+  const DOMStabilityMonitor = (() => {
+    let observer = null;
+    let disruptionScore = 0;
+    const DISRUPTION_THRESHOLD = 50; // Skips visual noise (<30), catches deletion (50+)
+    
+    // Weights for different types of mutations
+    const WEIGHTS = {
+      TEXT_CHANGE: 5,
+      CLASS_CHANGE: 2,
+      STYLE_CHANGE: 1,
+      NODE_ADDED: 15,
+      NODE_REMOVED: 25 
+    };
+
+    function startMonitoring() {
+      if (observer) return;
+      disruptionScore = 0;
+      
+      observer = new MutationObserver((mutations) => {
+        let batchScore = 0;
+        
+        mutations.forEach(mutation => {
+          // Ignore our own FolloMe overlays
+          if (mutation.target && mutation.target.id && mutation.target.id.startsWith('follome-')) return;
+          
+          if (mutation.type === 'childList') {
+            mutation.addedNodes.forEach(n => {
+              if (n.nodeType === Node.ELEMENT_NODE) batchScore += WEIGHTS.NODE_ADDED;
+            });
+            mutation.removedNodes.forEach(n => {
+              if (n.nodeType === Node.ELEMENT_NODE) batchScore += WEIGHTS.NODE_REMOVED;
+            });
+          } else if (mutation.type === 'attributes') {
+            if (mutation.attributeName === 'class') batchScore += WEIGHTS.CLASS_CHANGE;
+            if (mutation.attributeName === 'style') batchScore += WEIGHTS.STYLE_CHANGE;
+          } else if (mutation.type === 'characterData') {
+            batchScore += WEIGHTS.TEXT_CHANGE;
+          }
+        });
+
+        if (batchScore === 0) return;
+
+        disruptionScore += batchScore;
+        // console.log(`[FolloMe:Stability] Batch: +${batchScore} | Total: ${disruptionScore}`);
+        
+        if (disruptionScore >= DISRUPTION_THRESHOLD) {
+          console.warn(`[FolloMe:Stability] High disruption detected: ${disruptionScore}`);
+          disruptionScore = 0;
+          // Emit event for RecoveryEngine (T-6.2)
+          window.dispatchEvent(new CustomEvent('follome-dom-unstable'));
+        } else {
+          // Decay the score over time to ignore visual noise
+          setTimeout(() => { 
+            disruptionScore = Math.max(0, disruptionScore - batchScore); 
+          }, 3000);
+        }
+      });
+      
+      observer.observe(document.body, {
+        childList: true,
+        attributes: true,
+        characterData: true,
+        subtree: true,
+        attributeFilter: ['class', 'style']
+      });
+      console.log('[FolloMe:Stability] DOM Stability Monitor started.');
+    }
+
+    function stopMonitoring() {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+        console.log('[FolloMe:Stability] DOM Stability Monitor stopped.');
+      }
+      disruptionScore = 0;
+    }
+
+    return { startMonitoring, stopMonitoring, getScore: () => disruptionScore };
+  })();
+
+  // Expose to window for RecoveryEngine/Background to use
+  window.DOMStabilityMonitor = DOMStabilityMonitor;
+  // Automatically start tracking
+  DOMStabilityMonitor.startMonitoring();
+
   console.log('[FolloMe:content] Content script loaded and listening');
 })();

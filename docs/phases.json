@@ -1,0 +1,46 @@
+{
+  "phases": [
+    {
+      "id": "PHASE_0",
+      "name": "Foundation Pruning",
+      "description": "Strip redundant files, decouple context engine, and remove deprecated prompt builders.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_1",
+      "name": "Passive Conversation Capture",
+      "description": "Establish a MutationObserver based watcher to silently glean AI logic without injecting code directly.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_2",
+      "name": "Payload Normalization & Intent Profiling",
+      "description": "Standardize AI output into structured action intents and heuristically validate the active page domain.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_3",
+      "name": "Batch Groq Mapping Pipeline",
+      "description": "Consolidate mapping resolutions into a singular batch API query, integrating DOM and screenshot targets.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_4",
+      "name": "Decoupled Target Queue Engine",
+      "description": "Implement a background StepQueue serving as an async buffer boundary feeding the fast UI loop.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_5",
+      "name": "Autonomous UI Tracking",
+      "description": "Build continuous passive target polling that auto-advances the inference queue asynchronously natively in the DOM.",
+      "status": "PENDING"
+    },
+    {
+      "id": "PHASE_6",
+      "name": "Significance Stability & Recovery Layers",
+      "description": "Embed native 3-tier failure intelligence and threshold-based DOM Mutation check triggers.",
+      "status": "PENDING"
+    }
+  ]
+}

@@ -104,7 +104,9 @@ async function injectContentScripts(tabId, tab) {
         target: { tabId },
         files: [
           'utils/storage.js', 'utils/analytics.js',
-          'utils/context-extractor.js', 'utils/element-matcher.js',
+          'utils/context-engine.js', 'utils/intent-profiler.js',
+          'utils/screenshot-manager.js', 'utils/step-parser.js',
+          'utils/element-matcher.js',
           'content/cursor-guide.js', 'content/overlay.js',
           'content/speech.js', 'content/content.js'
         ]
@@ -331,6 +333,21 @@ async function handleMessage(message, sender) {
     }
 
     return { status: 'ok' };
+  }
+
+  else if (message.type === 'CONTEXT_UPDATED') {
+    console.log(`[FolloMe] Caching intent from ${message.source || 'watcher'}`);
+    try {
+      await chrome.storage.session.set({
+        lastIntent: message.payload,
+        lastIntentTimestamp: Date.now()
+      });
+      console.log('[FolloMe] Intent cached successfully in session storage');
+    } catch (err) {
+      console.error('[FolloMe] Failed to cache intent:', err);
+      return { status: 'error', error: err.message };
+    }
+    return { status: 'cached' };
   }
 
   else if (message.type === 'RELAY_TO_TAB') {

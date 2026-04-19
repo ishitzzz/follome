@@ -426,106 +426,7 @@ const ContextExtractor = (() => {
     };
   }
 
-  /**
-   * Build a clean prompt from extracted context.
-   * Asks the AI to return STRUCTURED actions in JSON format.
-   */
-  function buildPrompt(context, userQuestion = '') {
-    const { metadata, visibleText, uiElements } = context;
 
-    let prompt = `I'm currently on a webpage and need your help.\n\n`;
-    prompt += `**Page Title:** ${metadata.title}\n`;
-    prompt += `**URL:** ${metadata.url}\n`;
-    prompt += `**Viewport:** ${metadata.viewport.width}×${metadata.viewport.height}\n`;
-
-    if (metadata.description) {
-      prompt += `**Description:** ${metadata.description}\n`;
-    }
-
-    prompt += `\n**Visible Content (excerpt):**\n${visibleText}\n`;
-
-    // Build the structured UI elements table for the AI
-    if (uiElements.length > 0) {
-      prompt += `\n**Interactive UI Elements on this page:**\n`;
-      prompt += `\`\`\`json\n`;
-
-      // Strip internal properties before sending to AI
-      const sanitized = uiElements.map(el => {
-        const clean = {
-          idx: el._idx,
-          type: el.type,
-          text: el.text || undefined,
-          placeholder: el.placeholder || undefined,
-          ariaLabel: el.ariaLabel || undefined,
-          label: el.label || undefined,
-          name: el.name || undefined,
-          domId: el.domId || undefined,
-          x: el.x,
-          y: el.y,
-          width: el.width,
-          height: el.height,
-        };
-
-        // Add dropdown options if present
-        if (el.options) {
-          clean.options = el.options.map(o => o.text);
-        }
-
-        // Remove undefined values
-        return Object.fromEntries(
-          Object.entries(clean).filter(([_, v]) => v !== undefined && v !== '')
-        );
-      });
-
-      prompt += JSON.stringify(sanitized, null, 1);
-      prompt += `\n\`\`\`\n`;
-    }
-
-    if (userQuestion) {
-      prompt += `\n**My Question:** ${userQuestion}\n`;
-    } else {
-      prompt += `\n**Help me understand what to do next on this page.**\n`;
-    }
-
-    // Strict output enforcement — AI MUST return ONLY the structured block
-    prompt += `
-
-You MUST return your response ONLY in the following format:
-
-\`\`\`actions
-[
-  {
-    "action": "click | type | select | scroll | focus | hover | toggle | wait",
-    "target": "human readable element name",
-    "idx": number or null,
-    "value": "optional string or omit",
-    "explanation": "short instruction for the user"
-  }
-]
-\`\`\`
-
-Rules:
-- Do NOT include any text before or after the \`\`\`actions block.
-- Do NOT explain outside JSON.
-- Do NOT wrap in markdown except \`\`\`actions.
-- Always return at least one action.
-- If unsure, guess the most likely action the user should take.
-- "action" must be one of: click, type, select, scroll, focus, hover, toggle, wait.
-- "target" must be a human-readable element description (e.g. "Submit button", "Email input field").
-- "idx" should reference the element index from the UI Elements list above when possible, otherwise null.
-- "explanation" must be a short, actionable instruction.
-
-Example for a login page:
-\`\`\`actions
-[
-  {"action": "type", "target": "Email input field", "idx": 0, "value": "your email", "explanation": "Enter your email address"},
-  {"action": "type", "target": "Password field", "idx": 1, "value": "your password", "explanation": "Enter your password"},
-  {"action": "click", "target": "Sign In button", "idx": 2, "explanation": "Click to sign in"}
-]
-\`\`\``;
-
-    return prompt;
-  }
 
   /**
    * Get DOM element reference by extracted element index.
@@ -544,11 +445,23 @@ Example for a login page:
     return el ? el._selector : null;
   }
 
+  /**
+   * Returns a flat, stringifiable list of interactive elements, 
+   * stripping out DOM node references (_el) to allow safe message passing.
+   */
+  function getElementsForMapping() {
+    const rawElements = getUIElements();
+    return rawElements.map(el => {
+      const { _el, ...safeEl } = el;
+      return safeEl;
+    });
+  }
+
   return {
     extract,
-    buildPrompt,
     getMetadata,
     getUIElements,
+    getElementsForMapping,
     getElementByIndex,
     getSelectorByIndex,
   };

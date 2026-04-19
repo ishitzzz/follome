@@ -1,0 +1,116 @@
+{
+  "tasks": [
+    {
+      "id": "T-0.1",
+      "phase_id": "PHASE_0",
+      "description": "Delete deprecated modules: context-engine.js, teacher-prompt.js, step-parser.js and update manifest.json",
+      "dependencies": [],
+      "expected_output": "Dead files are removed from the filesystem and manifest loads cleanly without 404 module errors.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-0.2",
+      "phase_id": "PHASE_0",
+      "description": "Sanitize cursor-guide.js & context-extractor.js removing findCandidates/buildPrompt references.",
+      "dependencies": ["T-0.1"],
+      "expected_output": "Build tools execute cleanly and content_scripts initialize with zero undefined reference exceptions.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-1.1",
+      "phase_id": "PHASE_1",
+      "description": "Implement platform-agnostic MutationObserver in watchers/conversation-watcher.js.",
+      "dependencies": ["T-0.2"],
+      "expected_output": "The watcher silently fires a payload object containing AI intent whenever the chat DOM paints new data.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-1.2",
+      "phase_id": "PHASE_1",
+      "description": "Register CONTEXT_UPDATED background listener in service-worker.js to cache intents in chrome.storage.session.",
+      "dependencies": ["T-1.1"],
+      "expected_output": "Intents reliably survive cross-origin domain navigations inside the session cache.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-2.1",
+      "phase_id": "PHASE_2",
+      "description": "Build brain/step-normalizer.js to isolate actionable directives from conversational strings.",
+      "dependencies": ["T-1.2"],
+      "expected_output": "Input text dynamically collapses into a structured JSON array regardless of bulleted vs numbered format.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-2.2",
+      "phase_id": "PHASE_2",
+      "description": "Integrate validatePageMatch in intent-profiler.js aligning Teacher hints with live page heuristics.",
+      "dependencies": ["T-2.1"],
+      "expected_output": "Returns a domain alignment score blocking execution if the user opened an unrelated page.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-3.1",
+      "phase_id": "PHASE_3",
+      "description": "Expose flat list getter getElementsForMapping() inside context-extractor.js.",
+      "dependencies": ["T-2.2"],
+      "expected_output": "DOM extracts drop heavy prototype inheritance natively mapping to stringified JSON nodes safely.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-3.2",
+      "phase_id": "PHASE_3",
+      "description": "Construct brain/groq-mapper.js driving concurrent batch mapping execution over ALL step hints.",
+      "dependencies": ["T-3.1"],
+      "expected_output": "Given N instructions and N DOM layout objects, groq mapper sends a singular HTTP POST minimizing latency.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-4.1",
+      "phase_id": "PHASE_4",
+      "description": "Standup brain/guidance-state.js and StepQueue data structure.",
+      "dependencies": ["T-3.2"],
+      "expected_output": "In-memory queue pushes resolving state asynchronously without blocking loop readers.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-4.2",
+      "phase_id": "PHASE_4",
+      "description": "Rewrite TransitionEngine in cursor-guide.js using Step Lookahead interpolators.",
+      "dependencies": ["T-4.1"],
+      "expected_output": "Cursor computes Step[N+1] trajectory while residing on Step[N] eliminating frame stutter.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-5.1",
+      "phase_id": "PHASE_5",
+      "description": "Build PassiveProgressTracker attaching capture-phase Native Events (click, change, focus).",
+      "dependencies": ["T-4.2"],
+      "expected_output": "Global listeners track naturally occurring user clicks and advance StepQueue state cleanly.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-6.1",
+      "phase_id": "PHASE_6",
+      "description": "Construct DOMStabilityMonitor in content.js computing significance metrics.",
+      "dependencies": ["T-5.1"],
+      "expected_output": "Returns numeric scores representing disruption; skips visual noise (<30) but catches nodal deletion (50+).",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-6.2",
+      "phase_id": "PHASE_6",
+      "description": "Develop brain/recovery-engine.js applying 3-level fallbacks on Confidence < 0.4.",
+      "dependencies": ["T-6.1"],
+      "expected_output": "Nodes missing targets trigger targeted fuzzy searches natively without collapsing the whole layout map pipeline.",
+      "status": "COMPLETED"
+    },
+    {
+      "id": "T-7.0a",
+      "phase_id": "RECOVERY",
+      "description": "Synchronize tasks.json and state.json with new task arrays defined in docs/plan/implementation_plan.v2.resolved.md. This is required to bootstrap further execution.",
+      "dependencies": [],
+      "expected_output": "tasks.json reflects TSK-19 to TSK-21 (Phase 5: Speech & Edge Cases).",
+      "status": "PENDING"
+    }
+  ]
+}
