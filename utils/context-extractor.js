@@ -254,6 +254,34 @@ const ContextExtractor = (() => {
   }
 
   /**
+   * Compute the viewport region label for an element based on its bounding rect.
+   * Returns: 'top', 'bottom', 'left', 'right', 'center', 'top-left', 'top-right',
+   *          'bottom-left', 'bottom-right'.
+   *
+   * Used by getElementsForMapping() to attach positional context to each element
+   * for Groq's region-aware matching prompts.
+   *
+   * @param {{ left: number, top: number, width: number, height: number }} rect
+   * @param {number} viewportWidth
+   * @param {number} viewportHeight
+   * @returns {string}
+   */
+  function computeRegion(rect, viewportWidth, viewportHeight) {
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    const vertical = cy < viewportHeight * 0.25 ? 'top' :
+                     cy > viewportHeight * 0.75 ? 'bottom' : 'center';
+    const horizontal = cx < viewportWidth * 0.25 ? 'left' :
+                       cx > viewportWidth * 0.75 ? 'right' : 'center';
+
+    if (vertical === 'center' && horizontal === 'center') return 'center';
+    if (vertical === 'center') return horizontal;
+    if (horizontal === 'center') return vertical;
+    return `${vertical}-${horizontal}`;
+  }
+
+  /**
    * Extract a single UI element's structured data
    */
   function extractElementData(el, index) {
@@ -371,7 +399,7 @@ const ContextExtractor = (() => {
       '[role="menuitem"]', '[role="tab"]', '[role="checkbox"]',
       '[role="radio"]', '[role="switch"]', '[role="combobox"]',
       '[role="slider"]', '[role="searchbox"]',
-      'input', 'textarea', 'select',
+      'input:not([type="hidden"])', 'textarea', 'select',
       '[contenteditable="true"]',
       'summary',
       '[tabindex]:not([tabindex="-1"])',
@@ -446,15 +474,129 @@ const ContextExtractor = (() => {
   }
 
   /**
-   * Returns a flat, stringifiable list of interactive elements, 
-   * stripping out DOM node references (_el) to allow safe message passing.
+   * Returns a minimal, flat, stringifiable list of interactive elements
+   * optimised for the Groq mapper prompt. Each entry includes the computed
+   * viewport region so Groq can use position hints for disambiguation.
+   *
+   * Fields: idx, type, text, ariaLabel, placeholder, title, region
+   * (plus label and name which the batch prompt may optionally use).
    */
   function getElementsForMapping() {
     const rawElements = getUIElements();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
     return rawElements.map(el => {
-      const { _el, ...safeEl } = el;
-      return safeEl;
-    });
+      // Use the already-captured bounding box coords
+      const rect = {
+        left: el.x,
+        top: el.y,
+        width: el.width,
+        height: el.height
+      };
+
+      const rawEl = el._el;
+      const isInput = ['input', 'textarea', 'select'].includes(rawEl.tagName.toLowerCase());
+      let text = rawEl.getAttribute('aria-label') || rawEl.placeholder || rawEl.name || '';
+      
+      if (isInput) {
+          // Instagram/React hotfix: Steal the text from the parent wrapper
+          const parentLabel = rawEl.closest('label');
+          if (parentLabel && parentLabel.innerText) {
+              text = parentLabel.innerText;
+          } else if (rawEl.parentElement && rawEl.parentElement.innerText) {
+              text = rawEl.parentElement.innerText;
+          }
+      } else {
+          text = rawEl.innerText || text;
+      }
+      
+      text = text.trim().replace(/\s+/g, ' ').substring(0, 100);
+      
+      if (!text && !isInput) return null; 
+      
+      return {
+        idx: el._idx,
+        type: isInput ? 'input_field' : rawEl.tagName.toLowerCase(),
+        text: text || 'unlabeled_input',
+        ariaLabel: el.ariaLabel || '',
+        placeholder: el.placeholder || '',
+        title: el.title || '',
+        label: el.label || '',
+        name: el.name || '',
+        region: computeRegion(rect, vw, vh)
+      };
+    }).filter(Boolean);
+  }
+
+  /**
+   * Return expanded context for a specific element by index.
+   * Provides parent containers, sibling elements, and nearby visible text.
+   * Used by the Recovery Engine's Tier 1 silent retry to give Groq
+   * richer context when the initial match fails.
+   *
+   * @param {number} idx — the element _idx from getUIElements()
+   * @returns {{ parentText: string, parentTag: string, parentClasses: string,
+   *             siblings: Array<{type: string, text: string, idx: number}>,
+   *             nearbyText: string } | null}
+   */
+  function getExpandedContext(idx) {
+    // Re-scan to get live DOM references
+    const elements = getUIElements();
+    const target = elements.find(e => e._idx === idx);
+    if (!target || !target._el) return null;
+
+    const el = target._el;
+    const result = {
+      parentText: '',
+      parentTag: '',
+      parentClasses: '',
+      siblings: [],
+      nearbyText: ''
+    };
+
+    // ── Parent context ──
+    const parent = el.parentElement;
+    if (parent) {
+      result.parentTag = parent.tagName.toLowerCase();
+      result.parentClasses = Array.from(parent.classList).slice(0, 4).join(' ');
+      // Get parent's direct text (excluding deep children)
+      let parentDirectText = '';
+      for (const child of parent.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          parentDirectText += child.textContent;
+        }
+      }
+      result.parentText = parentDirectText.trim().substring(0, 120);
+
+      // ── Sibling elements ──
+      const siblingEls = Array.from(parent.children).filter(s => s !== el);
+      result.siblings = siblingEls.slice(0, 6).map(sib => {
+        const sibType = classifyElement(sib);
+        const sibIdx = elements.find(e => e._el === sib)?._idx ?? -1;
+        return {
+          type: sibType || sib.tagName.toLowerCase(),
+          text: (sib.textContent || '').trim().substring(0, 60),
+          idx: sibIdx
+        };
+      });
+    }
+
+    // ── Nearby text: walk up to 2 levels and collect visible text ──
+    const textParts = [];
+    let ancestor = parent;
+    for (let depth = 0; depth < 2 && ancestor && ancestor !== document.body; depth++) {
+      for (const child of ancestor.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const t = child.textContent.trim();
+          if (t.length > 2) textParts.push(t);
+        }
+      }
+      ancestor = ancestor.parentElement;
+    }
+    result.nearbyText = textParts.join(' ').substring(0, 200);
+
+    return result;
   }
 
   return {
@@ -462,11 +604,16 @@ const ContextExtractor = (() => {
     getMetadata,
     getUIElements,
     getElementsForMapping,
+    getExpandedContext,
     getElementByIndex,
     getSelectorByIndex,
+    computeRegion,
   };
 })();
 
 if (typeof window !== 'undefined') {
   window.ContextExtractor = ContextExtractor;
+}
+if (typeof self !== 'undefined') {
+  self.ContextExtractor = ContextExtractor;
 }

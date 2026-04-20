@@ -1,8 +1,13 @@
 /**
  * FolloMe — Background Service Worker
- * Handles tab management and message routing between popup and content scripts.
+ * Handles tab management, message routing, and the v3 guidance pipeline.
  */
 
+// ─────────────────────────────────────────────────────────────────────
+// v3 ES Module Imports (manifest: "type": "module")
+// ─────────────────────────────────────────────────────────────────────
+import { ContextCompressor, StepNormalizer } from '../brain/step-normalizer.js';
+import { batchMapInstructions, mapInstructionToElement, ResolutionModeSelector, selectModel, GroqMapper } from '../brain/groq-mapper.js';
 const AI_URLS = {
   chatgpt: 'https://chatgpt.com/',
   gemini: 'https://gemini.google.com/app',
@@ -39,6 +44,323 @@ const RESTRICTED_DOMAINS = [
 
 let sourceTabId = null;
 let aiTabId = null;
+
+// ─────────────────────────────────────────────────────────────────────
+// v3 Guidance Pipeline State
+// ─────────────────────────────────────────────────────────────────────
+
+// GuidanceSession + SyncController are loaded inline (cannot use ES import
+// for files that also load as content scripts via manifest content_scripts).
+// They attach to `self` when loaded. We lazy-init them here.
+let activeSession = null;
+
+/**
+ * Get or create the SyncController.
+ * It's defined in brain/guidance-state.js which is loaded as a content script.
+ * In the service worker context, we define a minimal inline version.
+ */
+const SyncController = {
+  _domVersion: 0,
+  _opLock: null,
+  _opAbort: null,
+  _pendingResolve: null,
+
+  get domVersion() { return this._domVersion; },
+  get signal() { return this._opAbort ? this._opAbort.signal : null; },
+
+  onDOMChanged() {
+    this._domVersion++;
+    if (this._opAbort) {
+      this._opAbort.abort();
+      this._opAbort = null;
+    }
+  },
+
+  async runPipeline(domSnapshot, pipelineFn) {
+    if (this._opLock) {
+      this._opAbort?.abort();
+      await this._opLock;
+    }
+
+    const startVersion = this._domVersion;
+    this._opAbort = new AbortController();
+    const signal = this._opAbort.signal;
+
+    this._opLock = new Promise(resolve => {
+      this._pendingResolve = resolve;
+    });
+
+    try {
+      const result = await pipelineFn(domSnapshot, signal);
+      if (this._domVersion !== startVersion) {
+        console.warn(`[Sync] DOM changed during pipeline (v${startVersion}→v${this._domVersion}). Discarding.`);
+        return null;
+      }
+      return result;
+    } finally {
+      this._pendingResolve?.();
+      this._opLock = null;
+      this._opAbort = null;
+    }
+  }
+};
+
+/**
+ * Minimal GuidanceSession for service worker context.
+ * Full class is in brain/guidance-state.js; this is a lightweight inline version
+ * since the SW can't import content-script-only files as ES modules.
+ */
+class GuidanceSession {
+  constructor(sourceTabId) {
+    this._version = 0;
+    this._sourceTabId = sourceTabId || null;
+    this._data = {
+      sessionId: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      status: 'idle',
+      domVersion: 0,
+      teacherData: null,
+      steps: [],
+      currentStepIndex: -1,
+      pipelineStage: null,
+      errors: [],
+      timeline: []
+    };
+  }
+
+  mutate(mutator, reason) {
+    const prevStatus = this._data.status;
+    mutator(this._data);
+    this._version++;
+    this._data.timeline.push({
+      version: this._version,
+      timestamp: Date.now(),
+      reason,
+      fromStatus: prevStatus,
+      toStatus: this._data.status,
+      pipelineStage: this._data.pipelineStage
+    });
+    if (this._data.timeline.length > 200) {
+      this._data.timeline = this._data.timeline.slice(-100);
+    }
+    this._persist();
+    this._notifyContentScript();
+  }
+
+  getProjection() {
+    return {
+      version: this._version,
+      sessionId: this._data.sessionId,
+      status: this._data.status,
+      currentStepIndex: this._data.currentStepIndex,
+      steps: this._data.steps.map(s => ({
+        instruction: s.instruction,
+        action: s.action,
+        status: s.status,
+        confidence: s.confidence,
+        resolvedVia: s.resolvedVia,
+        elementSelector: s.elementSelector,
+        elementIdx: s.elementIdx,
+        hint: s.hint,
+        groupId: s.groupId
+      })),
+      pipelineStage: this._data.pipelineStage,
+      errorCount: this._data.errors.length,
+      lastError: this._data.errors[this._data.errors.length - 1] || null
+    };
+  }
+
+  async _persist() {
+    try {
+      await chrome.storage.session.set({
+        'follome_session': {
+          version: this._version,
+          data: { ...this._data, steps: this._data.steps.map(s => ({ ...s, _element: undefined })) }
+        }
+      });
+    } catch (e) {
+      console.warn('[GuidanceSession] Persist failed:', e);
+    }
+  }
+
+  async _notifyContentScript() {
+    if (this._sourceTabId) {
+      try {
+        await chrome.tabs.sendMessage(this._sourceTabId, {
+          type: 'SESSION_STATE_UPDATE',
+          projection: this.getProjection()
+        });
+      } catch { /* tab may be closed */ }
+    }
+  }
+
+  setSourceTab(tabId) { this._sourceTabId = tabId; }
+  getData() { return this._data; }
+  getVersion() { return this._version; }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+// v3 Master Orchestrator: executeGuidancePipeline
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Master orchestrator for the v3 guidance pipeline.
+ * Runs the full Teacher → Normalize → Validate → Map → Execute flow.
+ *
+ * @param {string} teacherText — raw Teacher AI response text
+ * @param {number} tabId — source tab to send guidance to
+ * @param {object} [domSnapshot] — { elements: [...], url, title } (if pre-fetched)
+ */
+async function executeGuidancePipeline(teacherText, tabId, domSnapshot) {
+  const domElements = Array.isArray(domSnapshot) ? domSnapshot : (domSnapshot?.elements || []);
+  const pageUrl = domSnapshot?.url || 'unknown';
+  const logPrefix = '[FolloMe:Pipeline]';
+  console.log(`${logPrefix} Starting guidance pipeline for tab ${tabId}`);
+
+  // ── Step 1: Initialize session ──
+  activeSession = new GuidanceSession(tabId);
+  activeSession.mutate(data => {
+    data.status = 'normalizing';
+    data.pipelineStage = 'step_normalizer';
+    data.teacherData = teacherText;
+  }, 'pipeline_start');
+
+  // ── Step 2: Normalize teacher text into steps ──
+  let normalizedSteps;
+  try {
+    const { steps, explanation } = StepNormalizer.splitExplanationAndSteps(teacherText);
+    normalizedSteps = steps;
+    console.log(`${logPrefix} Normalized ${normalizedSteps.length} steps from teacher response`);
+
+    if (normalizedSteps.length === 0) {
+      console.warn(`${logPrefix} No actionable steps found in teacher response`);
+      activeSession.mutate(data => {
+        data.status = 'completed';
+        data.pipelineStage = null;
+      }, 'no_actionable_steps');
+
+      // Still send the response text for overlay display
+      await safeSendMessage(tabId, {
+        type: 'SHOW_RESPONSE',
+        response: teacherText,
+        explanation: explanation || teacherText
+      });
+      return;
+    }
+
+    activeSession.mutate(data => {
+      data.steps = normalizedSteps.map((s, i) => ({
+        ...s,
+        index: i,
+        status: 'pending'
+      }));
+      data.status = 'mapping';
+      data.pipelineStage = 'groq_mapper';
+    }, 'normalization_complete');
+  } catch (err) {
+    console.error(`${logPrefix} Normalization failed:`, err);
+    activeSession.mutate(data => {
+      data.status = 'failed';
+      data.errors.push({ stage: 'normalizer', error: err.message, timestamp: Date.now() });
+    }, 'normalization_error');
+    return;
+  }
+
+  // ── Step 3: Get DOM snapshot from content script (if not pre-fetched) ──
+  if (!domSnapshot) {
+    try {
+      const domResponse = await safeSendMessage(tabId, { type: 'GET_DOM_SNAPSHOT' });
+      if (domResponse && domResponse.elements) {
+        domSnapshot = domResponse;
+      } else {
+        console.warn(`${logPrefix} Could not get DOM snapshot from tab ${tabId}`);
+        // Proceed without DOM — we'll send steps without element mapping
+        domSnapshot = { elements: [], url: '', title: '' };
+      }
+    } catch {
+      domSnapshot = { elements: [], url: '', title: '' };
+    }
+  }
+
+  // ── Step 4: Batch map via Groq (wrapped in SyncController) ──
+  let resolvedSteps = normalizedSteps;
+
+  if (domElements.length > 0) {
+    const pipelineResult = await SyncController.runPipeline(domSnapshot, async (snapshot, signal) => {
+      console.log(`${logPrefix} Batch mapping ${normalizedSteps.length} steps against ${domElements.length} DOM elements`);
+
+      const syncStorage = await chrome.storage.sync.get('groqApiKey');
+      const apiKey = syncStorage.groqApiKey;
+      if (!apiKey) {
+        safeSendMessage(tabId, { type: 'SHOW_ERROR', error: 'Groq API Key is missing. Please set it in the extension popup.' });
+        throw new Error('Groq API Key missing');
+      }
+
+      const batchResults = await GroqMapper.batchMapInstructions(
+        normalizedSteps,
+        domElements,
+        { mode: 'DOM_ONLY', domain: pageUrl, pageURL: pageUrl, apiKey: apiKey },
+        signal
+      );
+
+      if (!batchResults || !batchResults.length) {
+         throw new Error('Groq mapping returned undefined or empty');
+      }
+
+      // Merge batch results into step objects
+      const merged = normalizedSteps.map((step, i) => {
+        const result = batchResults[i] || { idx: null, confidence: 0 };
+        return {
+          ...step,
+          elementIdx: result.idx,
+          confidence: result.confidence,
+          status: result.confidence >= 0.4 ? 'resolved' : 'pending',
+          resolvedVia: result.confidence >= 0.4 ? 'groq_batch' : 'unresolved'
+        };
+      });
+
+      return merged;
+    });
+
+    if (pipelineResult) {
+      resolvedSteps = pipelineResult;
+      console.log(`${logPrefix} Batch mapping complete. Resolved: ${resolvedSteps.filter(s => s.status === 'resolved').length}/${resolvedSteps.length}`);
+    } else {
+      console.warn(`${logPrefix} Pipeline invalidated (DOM changed). Using unresolved steps.`);
+    }
+  } else {
+    console.warn(`${logPrefix} No DOM elements available — sending steps without element mapping`);
+  }
+
+  // ── Step 5: Update session with resolved steps ──
+  activeSession.mutate(data => {
+    data.steps = resolvedSteps.map((s, i) => ({
+      ...s,
+      index: i
+    }));
+    data.currentStepIndex = 0;
+    data.status = 'executing';
+    data.pipelineStage = 'cursor_engine';
+  }, 'mapping_complete');
+
+  // ── Step 6: Send to content script for execution ──
+  const sendResult = await safeSendMessage(tabId, {
+    type: 'EXECUTE_GUIDANCE',
+    steps: resolvedSteps,
+    explanation: teacherText,
+    sessionId: activeSession.getData().sessionId
+  });
+
+  if (sendResult) {
+    console.log(`${logPrefix} ✓ Guidance pipeline complete. ${resolvedSteps.length} steps sent to tab ${tabId}`);
+  } else {
+    console.error(`${logPrefix} Failed to deliver guidance to tab ${tabId}`);
+    activeSession.mutate(data => {
+      data.status = 'failed';
+      data.errors.push({ stage: 'delivery', error: 'Message delivery failed', timestamp: Date.now() });
+    }, 'delivery_failed');
+  }
+}
 
 function isAIUrl(url) {
   return AI_PATTERNS.some(p => url?.includes(p));
@@ -103,12 +425,12 @@ async function injectContentScripts(tabId, tab) {
       await chrome.scripting.executeScript({
         target: { tabId },
         files: [
-          'utils/storage.js', 'utils/analytics.js',
-          'utils/context-engine.js', 'utils/intent-profiler.js',
-          'utils/screenshot-manager.js', 'utils/step-parser.js',
-          'utils/element-matcher.js',
-          'content/cursor-guide.js', 'content/overlay.js',
-          'content/speech.js', 'content/content.js'
+          'utils/context-extractor.js',
+          'brain/guidance-state.js',
+          'content/passive-tracker.js',
+          'content/overlay.js',
+          'content/cursor-guide.js',
+          'content/content.js'
         ]
       });
       await chrome.scripting.insertCSS({
@@ -270,26 +592,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   if (message.type === 'START_ANALYSIS') {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tabs[0]) {
-      console.warn('[FolloMe] START_ANALYSIS — no active tab found');
-      return { status: 'error', error: 'No active tab' };
-    }
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (!tabs.length) return sendResponse({ error: 'No active tab' });
+      const tab = tabs[0];
+      
+      // 1. Fetch the stored AI context
+      const storage = await chrome.storage.session.get('teacherContext');
+      if (!storage || !storage.teacherContext) {
+        safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'No AI instructions found. Ask ChatGPT first!' });
+        return sendResponse({ status: 'no_context' });
+      }
 
-    const tab = tabs[0];
-    const { restricted, reason } = checkRestricted(tab.url);
-    if (restricted) {
-      console.warn(`[FolloMe] START_ANALYSIS — active tab is restricted: ${reason}`);
-      return { status: 'error', error: `This page is not supported (${reason}). Please navigate to a regular webpage.` };
-    }
-
-    sourceTabId = tab.id;
-    const result = await safeSendMessage(sourceTabId, { type: 'ANALYZE_PAGE', question: message.question || '' });
-    if (result) {
-      return { status: 'started' };
-    } else {
-      return { status: 'error', error: 'Could not communicate with the page. Try reloading.' };
-    }
+      safeSendMessage(tab.id, { type: 'SHOW_LOADING', message: 'Mapping AI steps to page...' });
+      
+      // 2. Get the DOM snapshot from the target page
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT' }, (res) => {
+        if (res && res.domSnapshot) {
+          // 3. Fire the V3 Pipeline
+          executeGuidancePipeline(storage.teacherContext, tab.id, res.domSnapshot);
+        } else {
+          safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'Failed to read page. Please refresh.' });
+        }
+      });
+    });
+    return true;
   }
 
   else if (message.type === 'SEND_TO_AI') {
@@ -336,18 +662,70 @@ async function handleMessage(message, sender) {
   }
 
   else if (message.type === 'CONTEXT_UPDATED') {
-    console.log(`[FolloMe] Caching intent from ${message.source || 'watcher'}`);
+    console.log(`[FolloMe] Context received from ${message.platform || 'watcher'}`);
+    const teacherText = message.response || message.payload;
+
+    if (!teacherText) {
+      console.warn('[FolloMe] CONTEXT_UPDATED — empty response, ignoring');
+      return { status: 'empty' };
+    }
+
+    // a) Cache the raw context in session storage
     try {
       await chrome.storage.session.set({
-        lastIntent: message.payload,
-        lastIntentTimestamp: Date.now()
+        teacherContext: teacherText,
+        teacherContextTimestamp: message.timestamp || Date.now()
       });
-      console.log('[FolloMe] Intent cached successfully in session storage');
+      console.log('[FolloMe] Context cached in session storage');
     } catch (err) {
-      console.error('[FolloMe] Failed to cache intent:', err);
+      console.error('[FolloMe] Failed to cache context:', err);
+    }
+
+    // b) Query all active tabs to find the target (non-AI) tab
+    const senderTabId = sender?.tab?.id || null;
+    try {
+      const activeTabs = await chrome.tabs.query({ active: true });
+      console.log(`[FolloMe] Found ${activeTabs.length} active tab(s), sender tab: ${senderTabId}`);
+
+      // c) Loop through tabs — find the one that isn't the AI sender tab
+      for (const tab of activeTabs) {
+        if (tab.id === senderTabId) continue; // skip the AI tab that sent us the context
+
+        const { restricted } = checkRestricted(tab.url);
+        if (restricted) continue; // skip restricted pages
+
+        // d) Request DOM snapshot from this candidate tab
+        console.log(`[FolloMe] Requesting snapshot from tab ${tab.id}: ${tab.url}`);
+        const res = await safeSendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT' });
+
+        if (res && res.domSnapshot) {
+          console.log('[FolloMe] Snapshot received, starting guidance pipeline');
+          sourceTabId = tab.id; // update sourceTabId for future messages
+          executeGuidancePipeline(teacherText, tab.id, res.domSnapshot)
+            .catch(err => console.error('[FolloMe] Pipeline execution error:', err));
+          return { status: 'pipeline_started' };
+        } else {
+          console.warn(`[FolloMe] Tab ${tab.id} returned no snapshot, trying next...`);
+        }
+      }
+
+      // If we also have a sourceTabId from a previous START_ANALYSIS, try that
+      if (sourceTabId && sourceTabId !== senderTabId) {
+        console.log(`[FolloMe] Falling back to stored sourceTabId ${sourceTabId}`);
+        const res = await safeSendMessage(sourceTabId, { type: 'GET_DOM_SNAPSHOT' });
+        if (res && res.domSnapshot) {
+          executeGuidancePipeline(teacherText, sourceTabId, res.domSnapshot)
+            .catch(err => console.error('[FolloMe] Pipeline execution error:', err));
+          return { status: 'pipeline_started' };
+        }
+      }
+
+      console.warn('[FolloMe] CONTEXT_UPDATED — no valid target tab found for guidance');
+      return { status: 'cached_no_target' };
+    } catch (err) {
+      console.error('[FolloMe] Failed during tab discovery:', err);
       return { status: 'error', error: err.message };
     }
-    return { status: 'cached' };
   }
 
   else if (message.type === 'RELAY_TO_TAB') {
@@ -390,6 +768,51 @@ async function handleMessage(message, sender) {
       await handleMessage({ type: 'START_ANALYSIS', question: message.question }, sender);
     }
     return { status: 'ok' };
+  }
+
+  else if (message.type === 'STEP_OUTCOME') {
+    // Content script reports a step completion or failure
+    const { stepIndex, outcome } = message;
+    console.log(`[FolloMe] Step ${stepIndex + 1} outcome: ${outcome}`);
+
+    if (activeSession) {
+      activeSession.mutate(data => {
+        if (data.steps[stepIndex]) {
+          data.steps[stepIndex].status = outcome === 'completed' ? 'completed' : 'failed';
+          data.steps[stepIndex].completedAt = Date.now();
+        }
+        // Advance current step index
+        if (outcome === 'completed') {
+          data.currentStepIndex = Math.min(stepIndex + 1, data.steps.length - 1);
+          // Check if all steps are completed
+          const allDone = data.steps.every(s => s.status === 'completed' || s.status === 'skipped_by_user');
+          if (allDone) {
+            data.status = 'completed';
+            data.pipelineStage = null;
+          }
+        }
+      }, `step_${stepIndex}_${outcome}`);
+    }
+    return { status: 'ok' };
+  }
+
+  else if (message.type === 'DOM_VERSION_CHANGED') {
+    // Content script detected significant DOM change
+    console.log(`[FolloMe] DOM version changed: v${message.oldVersion} → v${message.newVersion}`);
+    SyncController.onDOMChanged(message);
+    return { status: 'ok' };
+  }
+
+  else if (message.type === 'PAGE_READY') {
+    const tabId = sender?.tab?.id;
+    console.log(`[FolloMe] PAGE_READY from tab ${tabId}`);
+    return { status: 'ok' };
+  }
+
+  else if (message.type === 'DOM_SIGNIFICANT_CHANGE') {
+    // Content script detected significant DOM mutation via DOMStabilityMonitor
+    console.log(`[FolloMe] DOM significant change detected (score: ${message.score}, affectsTracked: ${message.affectsTrackedElements})`);
+    return { status: 'acknowledged' };
   }
 
   console.warn(`[FolloMe] Unknown message type: ${message.type}`);

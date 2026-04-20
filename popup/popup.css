@@ -396,3 +396,156 @@ body {
   color: #3f3f46;
   border-top: 1px solid rgba(255, 255, 255, 0.03);
 }
+
+/* ── Settings Section ── */
+.settings-section {
+  background: #0a0a0f;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  user-select: none;
+}
+
+.settings-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #52525b;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+.settings-label svg {
+  color: #52525b;
+  transition: color 0.2s ease;
+}
+
+.settings-header:hover .settings-label svg {
+  color: #71717a;
+}
+
+.settings-chevron {
+  font-size: 16px;
+  color: #3f3f46;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  line-height: 1;
+}
+
+.settings-chevron.open {
+  transform: rotate(90deg);
+}
+
+.settings-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              padding 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 0 20px;
+}
+
+.settings-body.open {
+  max-height: 120px;
+  padding: 0 20px 14px;
+}
+
+.key-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.key-label {
+  font-size: 11px;
+  color: #71717a;
+  font-weight: 500;
+}
+
+.key-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.key-input {
+  flex: 1;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #e4e4e7;
+  font-size: 12px;
+  font-family: 'Inter', monospace;
+  letter-spacing: 0.5px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.key-input:focus {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.06);
+}
+
+.key-input::placeholder {
+  color: #3f3f46;
+  letter-spacing: 1px;
+}
+
+.btn-save-key {
+  height: 34px;
+  padding: 0 16px;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 8px;
+  color: #a5b4fc;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-save-key:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(129, 140, 248, 0.2));
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+}
+
+.btn-save-key:active {
+  transform: translateY(0);
+}
+
+.key-status {
+  font-size: 11px;
+  font-weight: 500;
+  min-height: 16px;
+  transition: all 0.3s ease;
+}
+
+.key-status.saved {
+  color: #22c55e;
+}
+
+.key-status.error {
+  color: #ef4444;
+}
+
+.key-status.loaded {
+  color: #52525b;
+}

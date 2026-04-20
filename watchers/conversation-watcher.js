@@ -3,7 +3,6 @@
  * Platform-agnostic passive listener via MutationObserver.
  * Watches the DOM for chat updates and silently fires CONTEXT_UPDATED.
  */
-
 (() => {
   if (window.__follomeWatcherLoaded) return;
   window.__follomeWatcherLoaded = true;
@@ -20,37 +19,27 @@
 
   console.log(`[FolloMe:Watcher] Initialized for ${adapter.name}`);
 
-  let lastSentResponse = '';
-  let debounceTimer = null;
-
-  function checkForUpdates() {
-    try {
-      if (typeof adapter.readLatestResponse !== 'function') return;
-      const currentResponse = adapter.readLatestResponse();
-      
-      if (currentResponse && currentResponse !== lastSentResponse) {
-        // Look for our specific JSON bounding signature
-        if (currentResponse.includes('```actions') && currentResponse.includes(']')) {
-          console.log('[FolloMe:Watcher] New actionable intent detected. Dispatching silently.');
-          lastSentResponse = currentResponse;
-          
-          chrome.runtime.sendMessage({
-            type: 'CONTEXT_UPDATED',
-            payload: currentResponse,
-            source: adapter.name
-          });
-        }
-      }
-    } catch (err) {
-      // Fail silently to avoid polluting the chat platform's console
-    }
-  }
+  let lastSeenMessage = '';
 
   const observer = new MutationObserver((mutations) => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      checkForUpdates();
-    }, 500);
+    try {
+      if (typeof adapter.extractLatestMessage !== 'function') return;
+      const newMessage = adapter.extractLatestMessage();
+      
+      // Definitively check for any new text, ignoring format
+      if (newMessage && newMessage !== lastSeenMessage && newMessage.trim().length > 10) {
+        lastSeenMessage = newMessage;
+        console.log('[FolloMe:Watcher] New message detected. Dispatching silently.');
+        chrome.runtime.sendMessage({
+          type: 'CONTEXT_UPDATED',
+          response: newMessage,
+          platform: adapter.name,
+          timestamp: Date.now()
+        });
+      }
+    } catch (err) {
+      console.debug('[FolloMe:Watcher] Watcher disconnected, waiting for reload');
+    }
   });
 
   observer.observe(document.body, {

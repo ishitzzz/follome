@@ -15,6 +15,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const eventCount = document.getElementById('eventCount');
   const aiOptions = document.querySelectorAll('.ai-option');
 
+  // ── Settings DOM Elements ──
+  const settingsToggle = document.getElementById('settingsToggle');
+  const settingsBody = document.getElementById('settingsBody');
+  const settingsChevron = document.getElementById('settingsChevron');
+  const groqApiKeyInput = document.getElementById('groq-api-key');
+  const saveKeyBtn = document.getElementById('save-key-btn');
+  const keyStatus = document.getElementById('keyStatus');
+
   // ── Load page info ──
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -135,4 +143,68 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusBar.className = `status-bar ${type}`;
     statusText.textContent = text;
   }
+
+  // ═══════════════════════════════════════════
+  //  SETTINGS: Groq API Key Management
+  // ═══════════════════════════════════════════
+
+  // ── Toggle settings panel ──
+  settingsToggle.addEventListener('click', () => {
+    const isOpen = settingsBody.classList.toggle('open');
+    settingsChevron.classList.toggle('open', isOpen);
+  });
+
+  // ── Load existing API key on popup open ──
+  try {
+    const result = await chrome.storage.sync.get('groqApiKey');
+    if (result.groqApiKey) {
+      groqApiKeyInput.value = result.groqApiKey;
+      keyStatus.textContent = '✓ Key loaded';
+      keyStatus.className = 'key-status loaded';
+    }
+  } catch (err) {
+    console.warn('[FolloMe:popup] Failed to load API key:', err);
+  }
+
+  // ── Save API key on button click ──
+  saveKeyBtn.addEventListener('click', async () => {
+    const value = groqApiKeyInput.value.trim();
+
+    if (!value) {
+      keyStatus.textContent = 'Please enter an API key';
+      keyStatus.className = 'key-status error';
+      return;
+    }
+
+    try {
+      // Save to chrome.storage.sync (persists across devices)
+      await chrome.storage.sync.set({ groqApiKey: value });
+
+      // Also save to chrome.storage.local under the key groq-mapper.js reads
+      await chrome.storage.local.set({ follome_groq_api_key: value });
+
+      // Show success feedback
+      keyStatus.textContent = '✓ Saved!';
+      keyStatus.className = 'key-status saved';
+
+      // Clear the success message after 2.5 seconds
+      setTimeout(() => {
+        keyStatus.textContent = '';
+        keyStatus.className = 'key-status';
+      }, 2500);
+
+      console.log('[FolloMe:popup] Groq API key saved successfully');
+    } catch (err) {
+      console.error('[FolloMe:popup] Failed to save API key:', err);
+      keyStatus.textContent = 'Failed to save — try again';
+      keyStatus.className = 'key-status error';
+    }
+  });
+
+  // ── Save on Enter key in the input field ──
+  groqApiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      saveKeyBtn.click();
+    }
+  });
 });

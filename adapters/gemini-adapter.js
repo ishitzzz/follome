@@ -62,6 +62,14 @@ class GeminiAdapter extends BaseAIAdapter {
 
     return messages[messages.length - 1]?.textContent?.trim() || '';
   }
+
+  extractLatestMessage() {
+    return this.readLatestResponse();
+  }
+
+  getObserverConfig() {
+    return { targetSelector: 'body', config: { childList: true, subtree: true } };
+  }
 }
 
 if (typeof window !== 'undefined') {

@@ -10,6 +10,7 @@
     "scripting"
   ],
   "host_permissions": [
+    "https://api.groq.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://gemini.google.com/*",
@@ -31,7 +32,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["utils/storage.js", "utils/analytics.js", "utils/context-extractor.js", "utils/element-matcher.js", "brain/guidance-state.js", "brain/recovery-engine.js", "content/cursor-guide.js", "content/passive-tracker.js", "content/overlay.js", "content/speech.js", "content/content.js"],
+      "js": ["utils/context-extractor.js", "brain/guidance-state.js", "content/passive-tracker.js", "content/overlay.js", "content/cursor-guide.js", "content/content.js"],
       "css": ["content/overlay.css", "content/cursor-guide.css"],
       "run_at": "document_idle"
     },

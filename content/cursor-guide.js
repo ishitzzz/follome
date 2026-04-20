@@ -84,6 +84,246 @@ const FolloCursorGuide = (() => {
 
 
   // ══════════════════════════════════════════
+  //  CONFIDENCE-BASED BEHAVIOR TIERS (v3)
+  // ══════════════════════════════════════════
+
+  const ConfidenceBehavior = {
+
+    /**
+     * Returns the UX behavior for a step based on its confidence.
+     * Runs in the FAST LAYER — no async, no API calls.
+     *
+     * @param {object} step — { confidence, ... }
+     * @returns {{ tier: string, highlightColor: string, showAlternates: boolean,
+     *             requireConfirmation: boolean, cursorStyle: string, transitionSpeed: number }}
+     */
+    getBehavior(step) {
+      const conf = step.confidence;
+
+      if (conf >= 0.85) {
+        // HIGH — direct execution: cursor moves, highlight, auto-advance on action
+        return {
+          tier: 'HIGH',
+          highlightColor: '#22c55e',     // green
+          showAlternates: false,
+          requireConfirmation: false,
+          cursorStyle: 'confident',       // solid, no wobble
+          transitionSpeed: 1.0            // full speed
+        };
+      }
+
+      if (conf >= 0.5) {
+        // MEDIUM — highlight with options: show the match + top alternate
+        return {
+          tier: 'MEDIUM',
+          highlightColor: '#f59e0b',     // amber
+          showAlternates: true,           // show "Did you mean X?" below label
+          requireConfirmation: false,     // still auto-advance on action
+          cursorStyle: 'uncertain',       // slight pulse effect
+          transitionSpeed: 0.85           // slightly slower approach
+        };
+      }
+
+      // LOW — ask user: show candidates, don't auto-advance
+      return {
+        tier: 'LOW',
+        highlightColor: '#ef4444',       // red
+        showAlternates: true,
+        requireConfirmation: true,        // wait for user to pick
+        cursorStyle: 'searching',         // orbit animation
+        transitionSpeed: 0.6              // gentle drift
+      };
+    },
+
+    /**
+     * Apply visual styling to cursor based on behavior tier.
+     * Called every frame — no allocations, just class toggles.
+     *
+     * @param {HTMLElement} el — cursor DOM element
+     * @param {object} behavior — from getBehavior()
+     */
+    applyCursorStyle(el, behavior) {
+      if (!el) return;
+      // Preserve base class, swap the tier-specific class
+      el.className = `follo-cursor ${behavior.cursorStyle}`;
+      // Keep 'active' class if guide is running
+      if (isActive) el.classList.add('active');
+    }
+  };
+
+
+  // ══════════════════════════════════════════
+  //  TRANSITION ENGINE (v3 — Zero-Pause)
+  // ══════════════════════════════════════════
+
+  /**
+   * Handles ALL cursor position computation.
+   * Called every rAF frame by the main loop.
+   * Owns the state machine: idle → approaching → dwelling → transitioning.
+   */
+  const TransitionEngine = {
+    _currentTarget: null,     // element cursor is at / moving toward
+    _nextTarget: null,        // pre-computed next target (lookahead)
+    _transitionPhase: 'idle', // idle | approaching | dwelling | transitioning
+    _dwellStartTime: 0,
+    _DWELL_MIN: 200,         // minimum ms to stay at a target (prevents flickering)
+
+    /**
+     * Called every rAF frame. Returns { x, y } for cursor position.
+     * Handles smooth transitions without ANY pauses.
+     *
+     * @param {number} timestamp — rAF timestamp
+     * @returns {{ x: number, y: number }}
+     */
+    computePosition(timestamp) {
+      // Need a StepQueue reference — use the local stepQueue or fall back to window globals
+      const queue = (typeof stepQueue !== 'undefined' && stepQueue) ? stepQueue : null;
+
+      const currentStep = queue ? queue.getCurrentStep() :
+        (window.folloSteps && window.folloSteps[window.folloCurrentStep] ? window.folloSteps[window.folloCurrentStep] : null);
+      const nextStep = queue ? queue.peekNext() :
+        (window.folloSteps && window.folloSteps[window.folloCurrentStep + 1] ? window.folloSteps[window.folloCurrentStep + 1] : null);
+
+      // ── NO STEPS: float gently ──
+      if (!currentStep) return this._float(timestamp);
+
+      // ── STEP PENDING (brain hasn't resolved): drift toward expected area ──
+      if (currentStep.status === 'pending') {
+        return this._driftToArea(currentStep);
+      }
+
+      // ── RESOLVE TARGET ELEMENT ──
+      const el = resolveElement(currentStep);
+      if (!el) {
+        // Element gone — smoothly fade and move on
+        if (queue) queue.advance(); else advanceStep();
+        return { x: currentX, y: currentY }; // hold position this frame
+      }
+
+      const rect = el.getBoundingClientRect();
+      const tx = rect.left + rect.width / 2;
+      const ty = rect.top + rect.height / 2;
+
+      // ── APPROACHING: lerp toward target ──
+      if (this._transitionPhase === 'idle' || this._transitionPhase === 'transitioning') {
+        this._currentTarget = { x: tx, y: ty, rect };
+        this._transitionPhase = 'approaching';
+      }
+
+      const behavior = ConfidenceBehavior.getBehavior(currentStep);
+      const speed = LERP_SPEED * behavior.transitionSpeed;
+
+      currentX += (tx - currentX) * speed;
+      currentY += (ty - currentY) * speed;
+
+      const dist = Math.hypot(tx - currentX, ty - currentY);
+
+      // ── ARRIVED: show highlight, start tracking ──
+      if (dist < NEAR_THRESHOLD && this._transitionPhase === 'approaching') {
+        this._transitionPhase = 'dwelling';
+        this._dwellStartTime = timestamp;
+
+        showHighlight(rect);
+        showStepLabel(currentStep, behavior);
+
+        // Apply confidence-based cursor style
+        ConfidenceBehavior.applyCursorStyle(cursorEl, behavior);
+
+        // Pre-compute next target for lookahead
+        if (nextStep && nextStep.status === 'resolved') {
+          const nextEl = resolveElement(nextStep);
+          if (nextEl) {
+            const nextRect = nextEl.getBoundingClientRect();
+            this._nextTarget = {
+              x: nextRect.left + nextRect.width / 2,
+              y: nextRect.top + nextRect.height / 2,
+              rect: nextRect
+            };
+          }
+        }
+
+        if (behavior.requireConfirmation) {
+          showCandidateOptions(currentStep); // LOW confidence — user picks
+        }
+      }
+
+      // ── DWELLING: cursor stays, but begins subtle lean toward next target ──
+      if (this._transitionPhase === 'dwelling' && this._nextTarget) {
+        const dwellTime = timestamp - this._dwellStartTime;
+        if (dwellTime > this._DWELL_MIN && currentStep.status === 'completed') {
+          // Step was completed during dwell — begin smooth transition
+          this._transitionPhase = 'transitioning';
+          arrived = false;
+          hideHighlight();
+
+          // DON'T snap — let the lerp naturally move toward next target
+          if (queue) queue.advance(); else advanceStep();
+        } else if (dwellTime > 1000) {
+          // Even if not completed, start leaning toward next (3% pull)
+          currentX += (this._nextTarget.x - currentX) * 0.03;
+          currentY += (this._nextTarget.y - currentY) * 0.03;
+        }
+      }
+
+      return { x: currentX, y: currentY };
+    },
+
+    /**
+     * Gentle floating animation when no active target.
+     * Cursor orbits slowly — feels alive, not frozen.
+     *
+     * @param {number} timestamp
+     * @returns {{ x: number, y: number }}
+     */
+    _float(timestamp) {
+      const amplitude = 20;
+      const speed = 0.001;
+      currentX += Math.sin(timestamp * speed) * 0.5;
+      currentY += Math.cos(timestamp * speed * 1.3) * 0.5;
+      return { x: currentX, y: currentY };
+    },
+
+    /**
+     * Drift toward the expected AREA of a pending step.
+     * Uses the instruction text to estimate position even before Groq resolves.
+     * E.g., "Enter email" → drift toward the form area (top-center of page).
+     *
+     * @param {object} pendingStep
+     * @returns {{ x: number, y: number }}
+     */
+    _driftToArea(pendingStep) {
+      // Use position hint if available
+      const hint = pendingStep.positionHint;
+      let driftX = window.innerWidth / 2;
+      let driftY = window.innerHeight / 3; // default to upper-third
+
+      if (hint) {
+        const hintStr = typeof hint === 'string' ? hint : (hint.region || '');
+        if (hintStr.includes('top')) driftY = window.innerHeight * 0.2;
+        if (hintStr.includes('bottom')) driftY = window.innerHeight * 0.8;
+        if (hintStr.includes('left')) driftX = window.innerWidth * 0.25;
+        if (hintStr.includes('right')) driftX = window.innerWidth * 0.75;
+      }
+
+      // Very slow drift (5% lerp) — not snapping, just gently moving
+      currentX += (driftX - currentX) * 0.05;
+      currentY += (driftY - currentY) * 0.05;
+      return { x: currentX, y: currentY };
+    },
+
+    /**
+     * Reset transition state (called on clearAll / replay).
+     */
+    reset() {
+      this._currentTarget = null;
+      this._nextTarget = null;
+      this._transitionPhase = 'idle';
+      this._dwellStartTime = 0;
+    }
+  };
+
+
+  // ══════════════════════════════════════════
   //  DOM HELPERS
   // ══════════════════════════════════════════
 
@@ -104,6 +344,96 @@ const FolloCursorGuide = (() => {
       return rect.width > 0 && rect.height > 0;
     } catch { return false; }
   }
+
+
+  // ══════════════════════════════════════════
+  //  ELEMENT RESOLUTION (v3 helpers)
+  // ══════════════════════════════════════════
+
+  /**
+   * Resolve a step to a live DOM element.
+   * Checks multiple sources: direct _el ref, selector, ContextExtractor idx.
+   *
+   * @param {object} step — { element, _el, elementSelector, elementIdx, ... }
+   * @returns {HTMLElement|null}
+   */
+  function resolveElement(step) {
+    if (!step) return null;
+
+    // 1. Direct DOM reference (from processResponse / local resolution)
+    if (step.element && isVisible(step.element)) return step.element;
+    if (step._el && isVisible(step._el)) return step._el;
+
+    // 2. CSS selector
+    if (step.elementSelector) {
+      try {
+        const el = document.querySelector(step.elementSelector);
+        if (el && isVisible(el)) return el;
+      } catch { /* invalid selector */ }
+    }
+
+    // 3. ContextExtractor index
+    if (step.elementIdx !== undefined && step.elementIdx !== null && typeof ContextExtractor !== 'undefined') {
+      try {
+        const elements = ContextExtractor.getUIElements();
+        const el = ContextExtractor.getElementByIndex(elements, step.elementIdx);
+        if (el && isVisible(el)) return el;
+      } catch { /* extractor may not be available */ }
+    }
+
+    return null;
+  }
+
+  /**
+   * Show step label with confidence-appropriate styling.
+   *
+   * @param {object} step — { instruction, action, stepNum, ... }
+   * @param {object} behavior — from ConfidenceBehavior.getBehavior()
+   */
+  function showStepLabel(step, behavior) {
+    const actionLabel = ACTION_LABELS[step.action] || ACTION_LABELS.fallback;
+    const instruction = step.instruction || step.description || step.target || actionLabel;
+    const stepNum = step.stepNum || step.index;
+    const prefix = stepNum !== undefined ? `${stepNum + 1}. ` : '';
+    const labelText = `${prefix}${instruction}`;
+
+    if (targetRect) {
+      showLabel(labelText, targetRect.left, targetRect.bottom);
+    }
+
+    // Color the highlight border based on confidence tier
+    if (highlightEl && behavior) {
+      highlightEl.style.borderColor = behavior.highlightColor;
+    }
+  }
+
+  /**
+   * Show candidate options for LOW confidence steps.
+   * Displays alternates so user can pick the correct element.
+   *
+   * @param {object} step — { alternates, ... }
+   */
+  function showCandidateOptions(step) {
+    // Placeholder for now — will be implemented as part of the overlay integration.
+    // LOW confidence steps show "Did you mean?" options.
+    if (step.alternates && step.alternates.length > 0) {
+      console.log(`[FolloMe] LOW confidence — showing ${step.alternates.length} alternates for user selection`);
+    }
+  }
+
+  /**
+   * Update the step counter display in the overlay.
+   *
+   * @param {number} current — 1-indexed current step number
+   * @param {number} total — total step count
+   */
+  function updateStepCounter(current, total) {
+    // Emit to overlay via event — overlay.js listens and updates its counter
+    window.dispatchEvent(new CustomEvent('follome-step-update', {
+      detail: { current, total }
+    }));
+  }
+
 
 
   // ══════════════════════════════════════════
@@ -305,167 +635,93 @@ const FolloCursorGuide = (() => {
 
 
   // ══════════════════════════════════════════
-  //  rAF GUIDANCE LOOP
-  //  Movement only — NO auto-completion.
-  //  Steps advance ONLY via user interaction.
+  //  rAF GUIDANCE LOOP (v3 — final architecture)
+  //  The loop is TINY. All intelligence is in:
+  //  - TransitionEngine (position computation)
+  //  - PassiveProgressTracker (completion detection) — NOT YET IMPLEMENTED
+  //  - ConfidenceBehavior (visual styling)
+  //  None of them do async work. None of them call APIs.
   // ══════════════════════════════════════════
 
-  // ── Lookahead helper: resolve centroid of Step[N+1] without touching DOM state ──
-  function resolveLookaheadCentroid() {
-    const steps = window.folloSteps;
-    const nextIdx = window.folloCurrentStep + 1;
-    if (!steps || nextIdx >= steps.length) return null;
-    const nextStep = steps[nextIdx];
-    if (!nextStep || !nextStep.element || !isVisible(nextStep.element)) return null;
-    const r = nextStep.element.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  // v3 StepQueue instance (content-script side)
+  let stepQueue = null;
+
+  /**
+   * Initialize the cursor engine with a StepQueue (from v3 pipeline).
+   * Called by content.js when it receives GUIDANCE_START from service worker.
+   *
+   * @param {StepQueue} queue
+   */
+  function initWithQueue(queue) {
+    stepQueue = queue;
+    _attachStepCompleteListener(); // Ensure completion events are wired
+  }
+
+  /**
+   * Update resolved steps from the service worker.
+   * Called when content.js receives STEPS_RESOLVED message.
+   *
+   * @param {Array} updates — resolved step data from batch mapping
+   */
+  function updateSteps(updates) {
+    if (!stepQueue || !updates) return;
+    for (const update of updates) {
+      if (update.index !== undefined) {
+        stepQueue.pushResolved(update.index, update);
+      }
+    }
+  }
+
+  // ── PassiveProgressTracker completion listener (registered once) ──
+  let _stepCompleteListenerAttached = false;
+
+  function _attachStepCompleteListener() {
+    if (_stepCompleteListenerAttached) return;
+    _stepCompleteListenerAttached = true;
+
+    window.addEventListener('follome-step-complete', (e) => {
+      const detail = e.detail || {};
+      console.log(`[FolloMe] Step complete event received (step ${(detail.stepIndex ?? '?') + 1}, action: ${detail.action})`);
+
+      // Advance via StepQueue (v3) or legacy advanceStep
+      if (stepQueue) {
+        stepQueue.advance();
+      } else {
+        advanceStep();
+      }
+
+      // Reset TransitionEngine so it smoothly moves to next target
+      arrived = false;
+      TransitionEngine._transitionPhase = 'idle';
+      TransitionEngine._nextTarget = null;
+      hideHighlight();
+    });
   }
 
   function runLoop(timestamp) {
     if (!isActive) return;
-
     requestAnimationFrame(runLoop);
-
     if (isPaused) return;
 
-    // ── TRANSITION PHASE (T-4.2): fast LERP after user action, seeded from lookahead ──
-    if (isTransitioning) {
+    // 1. Compute cursor position (TransitionEngine handles ALL states)
+    const pos = TransitionEngine.computePosition(timestamp);
+    setCursorPos(pos.x - 10, pos.y - 10);
+
+    // 2. Passive tracker completion is handled via event listener (follome-step-complete)
+    //    registered in _attachStepCompleteListener() — no polling needed here.
+
+    // 3. Update overlay step counter (cheap — just DOM text update)
+    if (stepQueue) {
+      const step = stepQueue.getCurrentStep();
+      if (step) {
+        updateStepCounter(stepQueue._activeStep + 1, stepQueue._steps.length);
+      }
+    } else {
+      // Legacy fallback: use window.folloSteps
       const steps = window.folloSteps;
       const stepIdx = window.folloCurrentStep;
-      if (!steps || stepIdx >= steps.length) {
-        isTransitioning = false;
-        return;
-      }
-      const step = steps[stepIdx];
-      if (!step || !step.element || !isVisible(step.element)) {
-        isTransitioning = false;
-        return;
-      }
-      const rect = step.element.getBoundingClientRect();
-      targetX = rect.left + rect.width / 2;
-      targetY = rect.top + rect.height / 2;
-
-      currentX += (targetX - currentX) * TRANSITION_LERP_SPEED;
-      currentY += (targetY - currentY) * TRANSITION_LERP_SPEED;
-      setCursorPos(currentX - 10, currentY - 10);
-
-      const dist = Math.hypot(targetX - currentX, targetY - currentY);
-      if (dist < NEAR_THRESHOLD) {
-        isTransitioning = false;
-        // Fall through to normal GUIDING on next frame
-      }
-      return;
-    }
-
-    const steps = window.folloSteps;
-    const stepIdx = window.folloCurrentStep;
-
-    // All steps done — cursor stays on last target, label says "Complete"
-    if (!steps || stepIdx >= steps.length) {
-      if (steps && steps.length > 0) {
-        showLabel('✓ Guide complete', currentX, currentY);
-      }
-      return;
-    }
-
-    const step = steps[stepIdx];
-    if (!step) return;
-
-    // Resolve element (re-resolve each frame so scrolled elements track)
-    let el = step.element;
-    if (!el || !isVisible(el) || step.confidence < 0.4) {
-      // Missing, hidden, or low confidence -> Trigger T-6.2 RecoveryEngine
-      if (typeof RecoveryEngine !== 'undefined') {
-        const recovered = RecoveryEngine.recover(step);
-        if (recovered) {
-          step.element = recovered;
-          el = recovered;
-        } else {
-          console.warn(`[FolloMe] Step ${stepIdx + 1}: Element recovery failed, skipping.`);
-          advanceStep();
-          return;
-        }
-      } else {
-        console.warn(`[FolloMe] Step ${stepIdx + 1}: Element not found and RecoveryEngine missing, skipping.`);
-        advanceStep();
-        return;
-      }
-    }
-
-    // Get element center
-    const rect = el.getBoundingClientRect();
-    targetX = rect.left + rect.width / 2;
-    targetY = rect.top + rect.height / 2;
-    targetRect = rect;
-
-    // Scroll into view if off-screen
-    if (rect.top < 0 || rect.bottom > window.innerHeight) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-
-    // ── GUIDING LERP with lookahead bleed (T-4.2) ──
-    // When arrived, gently drift exit velocity toward Step[N+1] centroid
-    if (arrived && lookaheadX > 0 && lookaheadY > 0) {
-      // Blend: 97% toward current target, 3% toward lookahead centroid — imperceptible drift
-      const blendedTargetX = targetX * (1 - LOOKAHEAD_DRIFT) + lookaheadX * LOOKAHEAD_DRIFT;
-      const blendedTargetY = targetY * (1 - LOOKAHEAD_DRIFT) + lookaheadY * LOOKAHEAD_DRIFT;
-      currentX += (blendedTargetX - currentX) * LERP_SPEED;
-      currentY += (blendedTargetY - currentY) * LERP_SPEED;
-    } else {
-      currentX += (targetX - currentX) * LERP_SPEED;
-      currentY += (targetY - currentY) * LERP_SPEED;
-    }
-    setCursorPos(currentX - 10, currentY - 10);
-
-    // Check arrival
-    const dist = Math.hypot(targetX - currentX, targetY - currentY);
-
-    if (dist < NEAR_THRESHOLD) {
-      if (!arrived) {
-        // Just arrived at target — enter GUIDING → WAITING state
-        arrived = true;
-        cursorEl.classList.add('arrived');
-        currentStepState = STEP_STATE.WAITING;
-
-        // ── PRE-FETCH lookahead centroid (T-4.2) ──
-        const la = resolveLookaheadCentroid();
-        if (la) {
-          lookaheadX = la.x;
-          lookaheadY = la.y;
-          console.log(`[FolloMe] Lookahead pre-loaded: Step[${stepIdx + 2}] @ (${Math.round(la.x)}, ${Math.round(la.y)})`);
-        } else {
-          lookaheadX = -100;
-          lookaheadY = -100;
-        }
-
-        // Show highlight around target
-        showHighlight(rect);
-
-        // Show step badge
-        if (step.stepNum) {
-          showBadge(step.stepNum, rect.left, rect.top);
-        }
-
-        // Show label with waiting indicator
-        const actionLabel = ACTION_LABELS[step.action] || ACTION_LABELS.fallback;
-        const waitMsg = step.explanation || actionLabel;
-        const labelText = `${step.stepNum ? step.stepNum + '. ' : ''}${waitMsg}`;
-        showLabel(labelText, rect.left, rect.bottom);
-
-        console.log(`[FolloMe] Step ${stepIdx + 1} targeting: <${el.tagName.toLowerCase()}> "${step.description}"`);
-        console.log(`[FolloMe] Waiting for user ${step.action}...`);
-      }
-
-      // NO dwell timer — cursor stays here until user interacts
-
-    } else {
-      // Still moving — cursor is in-flight
-      if (arrived) {
-        arrived = false;
-        lookaheadX = -100;
-        lookaheadY = -100;
-        cursorEl.classList.remove('arrived');
-        currentStepState = STEP_STATE.GUIDING;
+      if (steps && stepIdx < steps.length) {
+        updateStepCounter(stepIdx + 1, steps.length);
       }
     }
   }
@@ -603,6 +859,7 @@ const FolloCursorGuide = (() => {
     setCursorPos(currentX - 10, currentY - 10);
 
     // Start the loop
+    _attachStepCompleteListener(); // Wire passive tracker completion events
     if (!isActive) {
       isActive = true;
       requestAnimationFrame(runLoop);
@@ -778,6 +1035,70 @@ const FolloCursorGuide = (() => {
   }
 
 
+  // ══════════════════════════════════════════
+  //  v3: startGuidance — entry point from EXECUTE_GUIDANCE
+  // ══════════════════════════════════════════
+
+  /**
+   * Start guidance from an array of resolved steps (sent by service worker).
+   * Creates a StepQueue, populates it, starts passive tracking, and kicks off
+   * the rAF cursor loop.
+   *
+   * @param {Array} steps — resolved step objects from executeGuidancePipeline
+   */
+  function startGuidance(steps) {
+    if (!steps || !steps.length) return;
+
+    console.log(`[FolloMe] startGuidance called with ${steps.length} steps`);
+
+    // Activate
+    isActive = true;
+    isPaused = false;
+
+    // Create and populate StepQueue
+    if (typeof StepQueue !== 'undefined') {
+      stepQueue = new StepQueue();
+      steps.forEach((s, i) => {
+        stepQueue._steps[i] = { ...s, status: 'resolved', index: i };
+      });
+      stepQueue._resolvedUpTo = steps.length - 1;
+    } else {
+      // Fallback: use legacy window.folloSteps
+      console.warn('[FolloMe] StepQueue class not available, using legacy mode');
+      window.folloSteps = steps.map((s, i) => ({ ...s, index: i }));
+      window.folloCurrentStep = 0;
+    }
+
+    // Reset TransitionEngine
+    TransitionEngine.reset();
+    arrived = false;
+
+    // Ensure cursor DOM exists
+    ensureCursor();
+    cursorEl.classList.add('active');
+
+    // Position cursor at starting point (top-right)
+    currentX = window.innerWidth - 60;
+    currentY = 80;
+    setCursorPos(currentX - 10, currentY - 10);
+
+    // Wire step completion listener
+    _attachStepCompleteListener();
+
+    // Start passive tracking (batch mode)
+    if (typeof PassiveProgressTracker !== 'undefined') {
+      const trackSteps = stepQueue ? stepQueue._steps : window.folloSteps;
+      PassiveProgressTracker.startTracking(trackSteps, { stepQueue });
+    }
+
+    // Start the rAF loop
+    requestAnimationFrame(runLoop);
+
+    emitState();
+    console.log(`[FolloMe] ✓ Guidance started: ${steps.length} steps`);
+  }
+
+
   // ── Public API ──
   return {
     processResponse,
@@ -793,6 +1114,13 @@ const FolloCursorGuide = (() => {
     // State
     onGuideStateChange,
     getState,
+    // v3: StepQueue integration
+    initWithQueue,
+    updateSteps,
+    startGuidance,
+    // v3: Engine internals (exposed for service worker / content.js integration)
+    TransitionEngine,
+    ConfidenceBehavior,
   };
 })();
 

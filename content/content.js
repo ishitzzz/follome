@@ -1,193 +1,145 @@
 /**
  * FolloMe — Main Content Script
- * Runs on all web pages. Handles page analysis, overlay display, and cursor guidance.
- * Listener is registered immediately and unconditionally to ensure the
- * background service worker can always reach this script.
  */
-
 (() => {
-  // Register message listener IMMEDIATELY — even if this script runs multiple times.
-  // The guard flag only protects against duplicate DOM/logic setup, not the listener.
   const alreadyLoaded = !!window.__follomeContentLoaded;
 
-  // Always register listener so injection-retry can reach us
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log(`[FolloMe:content] Received message: ${message.type}`);
-
-    if (message.type === 'ANALYZE_PAGE') {
-      handleAnalyzePage(message.question);
-      sendResponse({ status: 'started' });
+    if (message.type === 'EXECUTE_GUIDANCE') {
+      if (typeof FolloOverlay !== 'undefined' && message.explanation) {
+        FolloOverlay.showResponse(message.explanation);
+      }
+      if (typeof FolloCursorGuide !== 'undefined' && message.steps) {
+        if (typeof FolloCursorGuide.startGuidance === 'function') {
+          FolloCursorGuide.startGuidance(message.steps);
+        } else if (typeof FolloCursorGuide.processResponse === 'function') {
+          FolloCursorGuide.processResponse(message.steps);
+        }
+      }
+      sendResponse({ status: 'executing' });
+    } else if (message.type === 'REQUEST_SNAPSHOT' || message.type === 'GET_DOM_SNAPSHOT') {
+      try {
+        const elements = typeof ContextExtractor.getElementsForMapping === 'function' 
+            ? ContextExtractor.getElementsForMapping() 
+            : [];
+        sendResponse({ 
+            domSnapshot: { 
+                elements: elements, 
+                url: window.location.href 
+            } 
+        });
+      } catch (e) {
+        console.error('[FolloMe] Context extraction failed:', e);
+        sendResponse({ domSnapshot: { elements: [], url: window.location.href } });
+      }
     } else if (message.type === 'SHOW_RESPONSE') {
-      handleShowResponse(message.response);
+      if (typeof FolloOverlay !== 'undefined') FolloOverlay.showResponse(message.response);
       sendResponse({ status: 'shown' });
     } else if (message.type === 'SHOW_ERROR') {
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showError(message.error);
-      } else {
-        console.error(`[FolloMe:content] FolloOverlay not available to show error: ${message.error}`);
-      }
+      if (typeof FolloOverlay !== 'undefined') FolloOverlay.showError(message.error);
       sendResponse({ status: 'shown' });
     } else if (message.type === 'SHOW_LOADING') {
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showLoading(message.message || 'Processing...');
-      }
+      if (typeof FolloOverlay !== 'undefined') FolloOverlay.showLoading(message.message || 'Processing...');
       sendResponse({ status: 'shown' });
     } else if (message.type === 'PING') {
       sendResponse({ status: 'alive' });
-    } else {
-      console.log(`[FolloMe:content] Unknown message type: ${message.type}`);
-      sendResponse({ status: 'unknown_type' });
     }
     return true;
   });
 
-  // If already loaded, skip the rest (prevents duplicate DOM setup)
-  if (alreadyLoaded) {
-    console.log('[FolloMe:content] Already loaded — listener re-registered, skipping init.');
-    return;
-  }
+  if (alreadyLoaded) return;
   window.__follomeContentLoaded = true;
 
-  async function handleAnalyzePage(userQuestion = '') {
-    try {
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showLoading('Reading page content...');
-      }
-      console.log('[FolloMe:content] Analyzing page...');
-
-      if (typeof ContextExtractor === 'undefined') {
-        console.error('[FolloMe:content] ContextExtractor is not available');
-        if (typeof FolloOverlay !== 'undefined') {
-          FolloOverlay.showError('Page analyzer not loaded. Try reloading the page.');
+  const DOMStabilityMonitor = {
+    _score: 0,
+    _THRESHOLD: 30,
+    _resetTimer: null,
+    _trackedElements: new Set(),
+  
+    trackElements(elements) {
+      DOMStabilityMonitor._trackedElements = new Set(elements);
+    },
+  
+    scoreMutations(mutations) {
+      let score = 0;
+      for (const m of mutations) {
+        if (m.type === 'characterData') continue;
+        if (m.type === 'attributes' && m.attributeName === 'style') continue;
+        if (m.type === 'attributes' && m.attributeName === 'class') {
+          if (DOMStabilityMonitor._trackedElements.has(m.target)) { score += 15; continue; }
+          continue;
         }
-        return;
-      }
-
-      const context = ContextExtractor.extract();
-      console.log('[FolloMe:content] Context extracted');
-      const prompt = ContextExtractor.buildPrompt(context, userQuestion);
-
-      chrome.runtime.sendMessage({
-        type: 'SEND_TO_AI',
-        prompt,
-        sourceTabUrl: window.location.href
-      });
-
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showLoading('Sending to AI...');
-      }
-    } catch (err) {
-      console.error('[FolloMe:content] Analysis error:', err);
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showError(`Failed to analyze page: ${err.message}`);
-      }
-    }
-  }
-
-  function handleShowResponse(response) {
-    if (!response) {
-      if (typeof FolloOverlay !== 'undefined') {
-        FolloOverlay.showError('No response received from AI.');
-      }
-      return;
-    }
-
-    console.log('[FolloMe:content] Displaying AI response');
-
-    if (typeof FolloOverlay !== 'undefined') {
-      FolloOverlay.showResponse(response);
-    } else {
-      console.error('[FolloMe:content] FolloOverlay not available to show response');
-    }
-  }
-
-  // ══════════════════════════════════════════
-  // DOM STABILITY MONITOR (T-6.1)
-  // ══════════════════════════════════════════
-  const DOMStabilityMonitor = (() => {
-    let observer = null;
-    let disruptionScore = 0;
-    const DISRUPTION_THRESHOLD = 50; // Skips visual noise (<30), catches deletion (50+)
-    
-    // Weights for different types of mutations
-    const WEIGHTS = {
-      TEXT_CHANGE: 5,
-      CLASS_CHANGE: 2,
-      STYLE_CHANGE: 1,
-      NODE_ADDED: 15,
-      NODE_REMOVED: 25 
-    };
-
-    function startMonitoring() {
-      if (observer) return;
-      disruptionScore = 0;
-      
-      observer = new MutationObserver((mutations) => {
-        let batchScore = 0;
-        
-        mutations.forEach(mutation => {
-          // Ignore our own FolloMe overlays
-          if (mutation.target && mutation.target.id && mutation.target.id.startsWith('follome-')) return;
-          
-          if (mutation.type === 'childList') {
-            mutation.addedNodes.forEach(n => {
-              if (n.nodeType === Node.ELEMENT_NODE) batchScore += WEIGHTS.NODE_ADDED;
-            });
-            mutation.removedNodes.forEach(n => {
-              if (n.nodeType === Node.ELEMENT_NODE) batchScore += WEIGHTS.NODE_REMOVED;
-            });
-          } else if (mutation.type === 'attributes') {
-            if (mutation.attributeName === 'class') batchScore += WEIGHTS.CLASS_CHANGE;
-            if (mutation.attributeName === 'style') batchScore += WEIGHTS.STYLE_CHANGE;
-          } else if (mutation.type === 'characterData') {
-            batchScore += WEIGHTS.TEXT_CHANGE;
+        if (m.type === 'attributes') {
+          if (['disabled', 'hidden', 'aria-hidden', 'aria-disabled'].includes(m.attributeName)) {
+            if (DOMStabilityMonitor._trackedElements.has(m.target)) { score += 20; continue; }
+            score += 2; continue;
           }
-        });
-
-        if (batchScore === 0) return;
-
-        disruptionScore += batchScore;
-        // console.log(`[FolloMe:Stability] Batch: +${batchScore} | Total: ${disruptionScore}`);
-        
-        if (disruptionScore >= DISRUPTION_THRESHOLD) {
-          console.warn(`[FolloMe:Stability] High disruption detected: ${disruptionScore}`);
-          disruptionScore = 0;
-          // Emit event for RecoveryEngine (T-6.2)
-          window.dispatchEvent(new CustomEvent('follome-dom-unstable'));
-        } else {
-          // Decay the score over time to ignore visual noise
-          setTimeout(() => { 
-            disruptionScore = Math.max(0, disruptionScore - batchScore); 
-          }, 3000);
+          continue;
         }
-      });
-      
-      observer.observe(document.body, {
-        childList: true,
-        attributes: true,
-        characterData: true,
-        subtree: true,
-        attributeFilter: ['class', 'style']
-      });
-      console.log('[FolloMe:Stability] DOM Stability Monitor started.');
-    }
-
-    function stopMonitoring() {
-      if (observer) {
-        observer.disconnect();
-        observer = null;
-        console.log('[FolloMe:Stability] DOM Stability Monitor stopped.');
+        if (m.type === 'childList') {
+          for (const node of m.removedNodes) {
+            if (node.nodeType !== 1) continue;
+            if (DOMStabilityMonitor._trackedElements.has(node)) { score += 50; continue; }
+            if (node.querySelector && [...DOMStabilityMonitor._trackedElements].some(el => node.contains(el))) {
+              score += 50; continue;
+            }
+          }
+          for (const node of m.addedNodes) {
+            if (node.nodeType !== 1) continue;
+            const interactiveCount = (node.matches?.('input,button,select,a,[role="button"]') ? 1 : 0) +
+              (node.querySelectorAll?.('input,button,select,a,[role="button"]')?.length || 0);
+            if (interactiveCount > 3) { score += 25; continue; }
+            if (interactiveCount > 0) { score += 5; continue; }
+          }
+        }
       }
-      disruptionScore = 0;
+      return score;
+    },
+  
+    onMutation(mutations) {
+      const batchScore = DOMStabilityMonitor.scoreMutations(mutations);
+      DOMStabilityMonitor._score += batchScore;
+  
+      clearTimeout(DOMStabilityMonitor._resetTimer);
+      DOMStabilityMonitor._resetTimer = setTimeout(() => {
+        if (DOMStabilityMonitor._score >= DOMStabilityMonitor._THRESHOLD) {
+          chrome.runtime.sendMessage({
+            type: 'DOM_SIGNIFICANT_CHANGE',
+            score: DOMStabilityMonitor._score,
+            affectsTrackedElements: DOMStabilityMonitor._score >= 50
+          });
+        }
+        DOMStabilityMonitor._score = 0;
+      }, 500);
     }
-
-    return { startMonitoring, stopMonitoring, getScore: () => disruptionScore };
-  })();
-
-  // Expose to window for RecoveryEngine/Background to use
+  };
+  
   window.DOMStabilityMonitor = DOMStabilityMonitor;
-  // Automatically start tracking
-  DOMStabilityMonitor.startMonitoring();
+  
+  const hostname = window.location.hostname;
+  const isAIPlatform = hostname.includes('chatgpt.com') || hostname.includes('claude.ai') || hostname.includes('gemini.google.com');
 
-  console.log('[FolloMe:content] Content script loaded and listening');
+  if (!isAIPlatform) {
+    const observer = new MutationObserver((muts) => DOMStabilityMonitor.onMutation(muts));
+    if (document.body) {
+      observer.observe(document.body, {
+        childList: true, subtree: true, attributes: true,
+        attributeFilter: ['class', 'style', 'disabled', 'hidden', 'aria-hidden', 'aria-disabled']
+      });
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        observer.observe(document.body, {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ['class', 'style', 'disabled', 'hidden', 'aria-hidden', 'aria-disabled']
+        });
+      });
+    }
+  }
+
+  if (typeof ContextExtractor !== 'undefined') {
+    chrome.runtime.sendMessage({
+      type: 'PAGE_READY',
+      domSnapshot: ContextExtractor.extract()
+    });
+  }
 })();
