@@ -9,12 +9,8 @@
       if (typeof FolloOverlay !== 'undefined' && message.explanation) {
         FolloOverlay.showResponse(message.explanation);
       }
-      if (typeof FolloCursorGuide !== 'undefined' && message.steps) {
-        if (typeof FolloCursorGuide.startGuidance === 'function') {
-          FolloCursorGuide.startGuidance(message.steps);
-        } else if (typeof FolloCursorGuide.processResponse === 'function') {
-          FolloCursorGuide.processResponse(message.steps);
-        }
+      if (message.steps) {
+        ProgressTracker.init(message.steps);
       }
       sendResponse({ status: 'executing' });
     } else if (message.type === 'REQUEST_SNAPSHOT' || message.type === 'GET_DOM_SNAPSHOT') {
@@ -49,6 +45,91 @@
 
   if (alreadyLoaded) return;
   window.__follomeContentLoaded = true;
+
+  const ProgressTracker = {
+    resolvedSteps: [],
+    activeStepIndex: 0,
+    activeListener: null,
+    activeElement: null,
+    activeEventType: null,
+
+    init(steps) {
+      if (typeof ContextExtractor !== 'undefined') {
+        const elements = ContextExtractor.getUIElements();
+        this.resolvedSteps = steps.map(s => {
+          let targetElement = null;
+          if (s.element && document.body.contains(s.element)) {
+            targetElement = s.element;
+          } else if (s.elementIdx !== undefined && s.elementIdx !== null) {
+            targetElement = ContextExtractor.getElementByIndex(elements, s.elementIdx);
+          } else if (s.elementSelector) {
+            try { targetElement = document.querySelector(s.elementSelector); } catch (e) {}
+          }
+          return { ...s, targetElement };
+        });
+      } else {
+        this.resolvedSteps = steps;
+      }
+      this.activeStepIndex = 0;
+      this.renderCurrentStep();
+    },
+
+    renderCurrentStep() {
+      if (this.activeElement && this.activeListener && this.activeEventType) {
+        this.activeElement.removeEventListener(this.activeEventType, this.activeListener);
+        this.activeListener = null;
+        this.activeElement = null;
+        this.activeEventType = null;
+      }
+
+      if (this.activeStepIndex >= this.resolvedSteps.length) {
+        console.log('[FolloMe] ProgressTracker: All steps completed.');
+        if (typeof FolloCursorGuide !== 'undefined' && typeof FolloCursorGuide.clearAll === 'function') {
+          FolloCursorGuide.clearAll();
+        }
+        return;
+      }
+
+      const step = this.resolvedSteps[this.activeStepIndex];
+      const targetElement = step.targetElement;
+
+      if (!targetElement) {
+        console.warn(`[FolloMe] ProgressTracker: No targetElement for step ${this.activeStepIndex}`);
+        this.activeStepIndex++;
+        this.renderCurrentStep();
+        return;
+      }
+
+      this.activeElement = targetElement;
+
+      if (typeof FolloCursorGuide !== 'undefined' && typeof FolloCursorGuide.startGuidance === 'function') {
+        FolloCursorGuide.startGuidance([step]);
+      }
+
+      const tagName = targetElement.tagName;
+      const isInput = tagName === 'INPUT' || tagName === 'TEXTAREA';
+      this.activeEventType = isInput ? 'blur' : 'click';
+
+      this.activeListener = () => {
+        console.log(`[FolloMe] Tracker observed interaction on step ${this.activeStepIndex}`);
+        this.activeElement.removeEventListener(this.activeEventType, this.activeListener);
+        this.activeListener = null;
+        this.activeElement = null;
+        this.activeEventType = null;
+
+        chrome.runtime.sendMessage({
+          type: 'STEP_OUTCOME',
+          stepIndex: this.activeStepIndex,
+          outcome: 'completed'
+        });
+
+        this.activeStepIndex++;
+        this.renderCurrentStep();
+      };
+
+      this.activeElement.addEventListener(this.activeEventType, this.activeListener);
+    }
+  };
 
   const DOMStabilityMonitor = {
     _score: 0,

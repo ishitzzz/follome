@@ -47,4 +47,61 @@
     subtree: true,
     characterData: true
   });
+
+  // Task 6.3: Two-way relay listener
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'ASK_TEACHER') {
+      const promptText = message.prompt;
+
+      // 1. Locate the ChatGPT input box
+      const inputBox = document.querySelector('div#prompt-textarea') || document.querySelector('textarea');
+      if (!inputBox) {
+        sendResponse({ status: 'error', error: 'Input box not found' });
+        return true;
+      }
+
+      // 2. React Text Injector
+      inputBox.focus();
+      document.execCommand('insertText', false, promptText);
+      inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // 3. Auto-Sender
+      setTimeout(() => {
+        const sendBtn = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label*="Send"]');
+        if (sendBtn) {
+          sendBtn.click();
+        }
+
+        // 4. Response Harvester
+        let attempts = 0;
+        const intervalId = setInterval(() => {
+          attempts++;
+          const isGenerating = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"]');
+          const sendBtnActive = document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"]');
+          
+          if (!isGenerating && sendBtnActive && attempts > 2) {
+            clearInterval(intervalId);
+            
+            setTimeout(() => {
+              let responseText = '';
+              if (adapter && typeof adapter.extractLatestMessage === 'function') {
+                responseText = adapter.extractLatestMessage();
+              } else {
+                const messages = document.querySelectorAll('[data-message-author-role="assistant"] .markdown');
+                if (messages.length > 0) {
+                  responseText = messages[messages.length - 1].innerText;
+                }
+              }
+
+              chrome.runtime.sendMessage({ type: 'TEACHER_RESPONSE', text: responseText });
+              sendResponse({ status: 'completed', text: responseText });
+            }, 1000);
+          }
+        }, 1000);
+      }, 500);
+
+      return true; // Crucial: async sendResponse
+    }
+  });
+
 })();

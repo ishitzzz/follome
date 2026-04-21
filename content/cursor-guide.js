@@ -28,6 +28,7 @@ const FolloCursorGuide = (() => {
 
   let cursorEl = null;       // single cursor div
   let labelEl = null;        // single label div
+  let tooltipEl = null;      // single tooltip div
   let highlightEl = null;    // single highlight div
   let badgeEl = null;        // single step-badge div
 
@@ -399,6 +400,10 @@ const FolloCursorGuide = (() => {
 
     if (targetRect) {
       showLabel(labelText, targetRect.left, targetRect.bottom);
+      if (tooltipEl) {
+          tooltipEl.innerText = step.text || step.instruction || 'Action required';
+          tooltipEl.style.display = 'block';
+      }
     }
 
     // Color the highlight border based on confidence tier
@@ -567,11 +572,17 @@ const FolloCursorGuide = (() => {
 
     cursorEl = document.createElement('div');
     cursorEl.id = 'follome-cursor';
+    cursorEl.style.position = 'fixed';
     document.body.appendChild(cursorEl);
 
     labelEl = document.createElement('div');
     labelEl.id = 'follome-cursor-label';
     document.body.appendChild(labelEl);
+
+    tooltipEl = document.createElement('div');
+    tooltipEl.id = 'follo-tooltip';
+    tooltipEl.style.cssText = 'position: absolute; top: 40px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 250px; background: #1e1e1e; color: white; padding: 10px; border-radius: 8px; font-family: sans-serif; font-size: 14px; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; z-index: 2147483647; text-align: center;';
+    cursorEl.appendChild(tooltipEl);
 
     highlightEl = document.createElement('div');
     highlightEl.id = 'follome-cursor-highlight';
@@ -605,6 +616,7 @@ const FolloCursorGuide = (() => {
   function hideLabel() {
     if (!labelEl) return;
     labelEl.classList.remove('visible');
+    if (tooltipEl) tooltipEl.style.display = 'none';
   }
 
   function showHighlight(rect) {

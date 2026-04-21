@@ -324,7 +324,57 @@ async function executeGuidancePipeline(teacherText, tabId, domSnapshot) {
 
     if (pipelineResult) {
       resolvedSteps = pipelineResult;
-      console.log(`${logPrefix} Batch mapping complete. Resolved: ${resolvedSteps.filter(s => s.status === 'resolved').length}/${resolvedSteps.length}`);
+      const resolvedCount = resolvedSteps.filter(s => s.status === 'resolved').length;
+      console.log(`${logPrefix} Batch mapping complete. Resolved: ${resolvedCount}/${resolvedSteps.length}`);
+
+      const chatGptTabs = await chrome.tabs.query({url: "*://chatgpt.com/*"});
+      if (resolvedCount < (normalizedSteps.length * 0.6) && chatGptTabs.length > 0) {
+          console.log('[FolloMe:Pipeline] Threshold failed. Triggering Autonomous Fallback...');
+          const teacherTabId = chatGptTabs[0].id;
+          safeSendMessage(tabId, { type: 'SHOW_LOADING', message: 'Asking AI for updated steps...' });
+          
+          // Summarize the DOM so ChatGPT knows what page we are actually on
+          const domSummary = domElements.slice(0, 15).map(e => e.text).filter(Boolean).join(', ');
+          const fallbackPrompt = `The user is trying to follow your instructions, but they are on a page with these elements: [${domSummary}]. The previous steps don't match. Give me the EXACT next 3 steps for this specific page layout.`;
+          
+          try {
+              // Secretly ask ChatGPT via our Relay
+              const newTeacherResponse = await new Promise((resolve, reject) => {
+                  chrome.tabs.sendMessage(teacherTabId, { type: 'ASK_TEACHER', prompt: fallbackPrompt }, (res) => {
+                      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                      else resolve(res);
+                  });
+              });
+              
+              if (newTeacherResponse && newTeacherResponse.text) {
+                  console.log('[FolloMe:Pipeline] Received dynamic correction from Teacher!');
+                  // Re-normalize and re-map with the new instructions
+                  const { steps: newNormalizedSteps } = StepNormalizer.splitExplanationAndSteps(newTeacherResponse.text);
+                  const syncStorage = await chrome.storage.sync.get('groqApiKey');
+                  const retryBatch = await GroqMapper.batchMapInstructions(
+                      newNormalizedSteps,
+                      domElements,
+                      { mode: 'DOM_ONLY', domain: pageUrl, pageURL: pageUrl, apiKey: syncStorage.groqApiKey },
+                      null
+                  );
+                  
+                  // Re-apply resolved targets
+                  resolvedSteps = newNormalizedSteps.map((step, i) => {
+                      const result = retryBatch[i] || { idx: null, confidence: 0 };
+                      return {
+                          ...step,
+                          elementIdx: result.idx,
+                          confidence: result.confidence,
+                          status: result.confidence >= 0.4 ? 'resolved' : 'pending',
+                          resolvedVia: result.confidence >= 0.4 ? 'groq_batch_fallback' : 'unresolved'
+                      };
+                  });
+              }
+          } catch (error) {
+              console.error('[FolloMe:Pipeline] Fallback failed:', error);
+          }
+          return; // Abort the broken pipeline so it doesn't execute the bad steps!
+      }
     } else {
       console.warn(`${logPrefix} Pipeline invalidated (DOM changed). Using unresolved steps.`);
     }
@@ -343,16 +393,28 @@ async function executeGuidancePipeline(teacherText, tabId, domSnapshot) {
     data.pipelineStage = 'cursor_engine';
   }, 'mapping_complete');
 
+  // ── Deduplicate Consecutive Steps ──
+  const cleanedSteps = [];
+  let lastIdx = null;
+  resolvedSteps.forEach(step => {
+      if (step.status === 'resolved' && step.elementIdx !== null && step.elementIdx !== undefined) {
+          if (step.elementIdx !== lastIdx) {
+              cleanedSteps.push(step);
+              lastIdx = step.elementIdx;
+          }
+      }
+  });
+
   // ── Step 6: Send to content script for execution ──
   const sendResult = await safeSendMessage(tabId, {
     type: 'EXECUTE_GUIDANCE',
-    steps: resolvedSteps,
+    steps: cleanedSteps,
     explanation: teacherText,
     sessionId: activeSession.getData().sessionId
   });
 
   if (sendResult) {
-    console.log(`${logPrefix} ✓ Guidance pipeline complete. ${resolvedSteps.length} steps sent to tab ${tabId}`);
+    console.log(`${logPrefix} ✓ Guidance pipeline complete. ${cleanedSteps.length} steps sent to tab ${tabId}`);
   } else {
     console.error(`${logPrefix} Failed to deliver guidance to tab ${tabId}`);
     activeSession.mutate(data => {
@@ -592,30 +654,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   if (message.type === 'START_ANALYSIS') {
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-      if (!tabs.length) return sendResponse({ error: 'No active tab' });
-      const tab = tabs[0];
-      
-      // 1. Fetch the stored AI context
-      const storage = await chrome.storage.session.get('teacherContext');
-      if (!storage || !storage.teacherContext) {
-        safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'No AI instructions found. Ask ChatGPT first!' });
-        return sendResponse({ status: 'no_context' });
-      }
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) return { error: 'No active tab' };
+    const tab = tabs[0];
+    
+    // 1. Fetch the stored AI context
+    const storage = await chrome.storage.session.get('teacherContext');
+    if (!storage || !storage.teacherContext) {
+      safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'No AI instructions found. Ask ChatGPT first!' });
+      return { status: 'no_context' };
+    }
 
-      safeSendMessage(tab.id, { type: 'SHOW_LOADING', message: 'Mapping AI steps to page...' });
-      
-      // 2. Get the DOM snapshot from the target page
-      chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT' }, (res) => {
-        if (res && res.domSnapshot) {
-          // 3. Fire the V3 Pipeline
-          executeGuidancePipeline(storage.teacherContext, tab.id, res.domSnapshot);
-        } else {
-          safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'Failed to read page. Please refresh.' });
+    safeSendMessage(tab.id, { type: 'SHOW_LOADING', message: 'Mapping AI steps to page...' });
+    
+    // 2. Get the DOM snapshot from the target page
+    try {
+      const res = await safeSendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT' });
+      if (res && res.domSnapshot) {
+        const tabUrl = message.url || (sender.tab && sender.tab.url) || (tab && tab.url) || '';
+        if (tabUrl.includes('chatgpt.com') || tabUrl.includes('gemini.google.com') || tabUrl.includes('claude.ai')) {
+            console.warn('[FolloMe] SECURITY GUARDRAIL: Cannot run guidance on an AI tab. Aborting to prevent infinite loop.');
+            return; 
         }
-      });
-    });
-    return true;
+        // 3. Fire the V3 Pipeline
+        executeGuidancePipeline(storage.teacherContext, tab.id, res.domSnapshot);
+      } else {
+        safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'Failed to read page. Please refresh.' });
+      }
+    } catch (e) {
+      safeSendMessage(tab.id, { type: 'SHOW_ERROR', error: 'Failed to read page. Please refresh.' });
+    }
+    return { status: 'started' };
   }
 
   else if (message.type === 'SEND_TO_AI') {
@@ -661,8 +730,8 @@ async function handleMessage(message, sender) {
     return { status: 'ok' };
   }
 
-  else if (message.type === 'CONTEXT_UPDATED') {
-    console.log(`[FolloMe] Context received from ${message.platform || 'watcher'}`);
+  else if (message.type === 'CONTEXT_UPDATED' || message.type === 'TEACHER_RESPONSE') {
+    console.log(`[FolloMe] Context/Teacher Response received from ${message.platform || 'ChatGPT'}`);
     const teacherText = message.response || message.payload;
 
     if (!teacherText) {
